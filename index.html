@@ -81,6 +81,17 @@
     background:var(--scan); color:var(--scan-ink); border:none; border-radius:10px;
     padding:14px; font-size:15px; font-weight:700; margin-bottom:12px;}
   .scan-btn svg{width:20px; height:20px; flex:0 0 auto;}
+  .scan-btn:disabled{opacity:.5;}
+  .tagphoto-btn{background:var(--ink); color:var(--paper);}
+  .ocr-result{background:var(--paper); border:1px solid var(--line); border-radius:9px;
+    padding:10px 12px; margin:0 0 12px;}
+  .ocr-result[hidden]{display:none;}
+  .ocr-result-label{display:flex; justify-content:space-between; align-items:center;
+    font-size:11px; font-weight:700; color:var(--ink-soft); margin-bottom:6px;}
+  .ocr-result-label button{background:none; border:none; color:var(--ink-soft); font-size:11px;
+    font-weight:700; text-decoration:underline; padding:0;}
+  .ocr-result pre{white-space:pre-wrap; word-break:break-word; font-size:12px; color:var(--ink);
+    max-height:140px; overflow-y:auto; margin:0; font-family:"JetBrains Mono","Noto Sans JP",monospace;}
   .divider-label{display:flex; align-items:center; gap:10px; color:var(--ink-soft); font-size:12px;
     margin:2px 0 12px;}
   .divider-label::before,.divider-label::after{content:""; flex:1; height:1px; background:var(--line);}
@@ -182,6 +193,19 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><path d="M4 12h16" stroke-dasharray="1.5 2.5"/></svg>
         バーコードをスキャン
       </button>
+      <button type="button" class="scan-btn tagphoto-btn" id="tagphoto-open">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.3"/></svg>
+        タグ全体を撮影して読み取る
+      </button>
+      <input type="file" accept="image/*" capture="environment" id="tagphoto-input" style="display:none;">
+      <div class="lookup-preview" id="ocr-status"></div>
+      <div class="ocr-result" id="ocr-result" hidden>
+        <div class="ocr-result-label">
+          <span>読み取った文字（参考）</span>
+          <button type="button" id="ocr-result-close">閉じる</button>
+        </div>
+        <pre id="ocr-result-text"></pre>
+      </div>
       <div class="divider-label">または手入力</div>
 
       <div class="field">
@@ -191,6 +215,11 @@
       <div class="lookup-preview" id="lookup-preview"></div>
 
       <div class="field" style="margin-top:12px;">
+        <label for="hinban-input">品番</label>
+        <input type="text" id="hinban-input" class="mono" placeholder="例：SP84040324" autocomplete="off">
+      </div>
+
+      <div class="field">
         <label for="name-input">商品名</label>
         <input type="text" id="name-input" placeholder="タグに記載の商品名" autocomplete="off">
       </div>
@@ -247,6 +276,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -279,6 +309,87 @@
   }
   function janLooksValid(jan){ return /^\d{8}$/.test(jan) || /^\d{13}$/.test(jan); }
   function calcExcl(priceIncl){ return Math.round(priceIncl/1.1); }
+
+  // ---- タグ撮影OCR（Tesseract.js, ブラウザ内のみで処理・外部送信なし） ----
+  function extractJanFromText(text){
+    var m13 = text.match(/\d{13}/);
+    if (m13) return m13[0];
+    var m8 = text.match(/\b\d{8}\b/);
+    if (m8) return m8[0];
+    return '';
+  }
+  function extractHinbanFromText(text){
+    var re = /\b[A-Za-z]{1,4}-?\d{5,10}\b/g;
+    var m = re.exec(text);
+    return m ? m[0].toUpperCase() : '';
+  }
+  function extractSizeFromText(text){
+    var tokens = text.split(/[^A-Za-z0-9]+/);
+    var sizeRe = /^(XXS|XS|S|M|L|LL|XL|XXL|XXXL|F|FREE)$/i;
+    var numRe = /^[2-6]\d$/;
+    for (var i=0;i<tokens.length;i++){
+      var t = tokens[i].trim();
+      if (!t) continue;
+      if (sizeRe.test(t)) return t.toUpperCase();
+      if (numRe.test(t)) return t;
+    }
+    return '';
+  }
+  function fillFieldIfEmpty(id, value){
+    if (!value) return false;
+    var el = document.getElementById(id);
+    if (el && !el.value.trim()){ el.value = value; return true; }
+    return false;
+  }
+  function setOcrStatus(msg, kind){
+    var el = document.getElementById('ocr-status');
+    el.className = 'lookup-preview' + (kind ? ' '+kind : '');
+    el.textContent = msg || '';
+  }
+  function showOcrResult(text){
+    document.getElementById('ocr-result-text').textContent = text;
+    document.getElementById('ocr-result').hidden = false;
+  }
+  function hideOcrResult(){
+    document.getElementById('ocr-result').hidden = true;
+  }
+  function handleTagPhotoChange(ev){
+    var file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (typeof Tesseract === 'undefined'){
+      setOcrStatus('読み取り機能を読み込めませんでした。手入力をご利用ください。', 'bad');
+      return;
+    }
+    hideOcrResult();
+    setOcrStatus('文字を読み取っています…（数秒かかります）', '');
+    document.getElementById('tagphoto-open').disabled = true;
+    document.getElementById('scan-open').disabled = true;
+    Tesseract.recognize(file, 'jpn+eng', {})
+      .then(function(result){
+        var text = (result && result.data && result.data.text) ? result.data.text : '';
+        var jan = extractJanFromText(text);
+        var hinban = extractHinbanFromText(text);
+        var size = extractSizeFromText(text);
+        var filledAny = false;
+        if (fillFieldIfEmpty('jan-input', jan)){ handleJanInput(); filledAny = true; }
+        if (fillFieldIfEmpty('hinban-input', hinban)) filledAny = true;
+        if (fillFieldIfEmpty('size-input', size)) filledAny = true;
+        if (text.trim()) showOcrResult(text.trim());
+        updateAddButtonState();
+        setOcrStatus(
+          filledAny ? '一部の項目を自動入力しました。内容をご確認のうえ、残りをご入力ください。' : '自動入力できませんでした。下の読み取り結果を見ながらご入力ください。',
+          filledAny ? 'ok' : 'bad'
+        );
+      })
+      .catch(function(){
+        setOcrStatus('読み取りに失敗しました。手入力をご利用ください。', 'bad');
+      })
+      .then(function(){
+        document.getElementById('tagphoto-open').disabled = false;
+        document.getElementById('scan-open').disabled = false;
+      });
+  }
 
   selectedDate = todayStr();
 
@@ -425,7 +536,8 @@
         + '<span class="entry-amount mono">¥'+Number(e.amount).toLocaleString('ja-JP')+'</span>'
         + '<button type="button" class="entry-del" data-id="'+e.id+'" aria-label="削除">×</button>'
         + '</div>'
-        + '<div class="entry-meta mono">'+escapeHtml(e.jan)+' ・ '+escapeHtml(e.size||'')+' '+escapeHtml(e.color||'')+'</div>'
+        + '<div class="entry-meta mono">JAN '+escapeHtml(e.jan)+(e.hinban?' ・ 品番 '+escapeHtml(e.hinban):'')+'</div>'
+        + '<div class="entry-sub mono">'+escapeHtml(e.size||'')+' '+escapeHtml(e.color||'')+'</div>'
         + '<div class="entry-sub mono">税込¥'+Number(e.priceIncl).toLocaleString('ja-JP')+' ・ 税抜¥'+Number(e.priceExcl).toLocaleString('ja-JP')+' × '+e.qty+'</div>'
         + '</div>';
     }).join('');
@@ -487,6 +599,7 @@
 
   function handleAddClick(){
     var jan = document.getElementById('jan-input').value.trim();
+    var hinban = document.getElementById('hinban-input').value.trim();
     var name = document.getElementById('name-input').value.trim();
     var size = document.getElementById('size-input').value.trim();
     var color = document.getElementById('color-input').value.trim();
@@ -496,7 +609,7 @@
     var priceExcl = calcExcl(priceIncl);
     var entry = {
       id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('e'+Date.now()+Math.random().toString(36).slice(2)),
-      date: selectedDate, jan: jan, name: name, size: size, color: color,
+      date: selectedDate, jan: jan, hinban: hinban, name: name, size: size, color: color,
       priceIncl: priceIncl, priceExcl: priceExcl, qty: qty, amount: priceIncl*qty, ts: Date.now()
     };
     setBusy(true);
@@ -508,6 +621,7 @@
         return;
       }
       document.getElementById('jan-input').value='';
+      document.getElementById('hinban-input').value='';
       document.getElementById('name-input').value='';
       document.getElementById('size-input').value='';
       document.getElementById('color-input').value='';
@@ -516,6 +630,8 @@
       document.getElementById('lookup-preview').className='lookup-preview';
       document.getElementById('price-excl-preview').innerHTML='';
       document.getElementById('price-excl-preview').className='lookup-preview';
+      setOcrStatus('');
+      hideOcrResult();
       currentQty = 1; renderQty();
       showToast('追加しました', 'good');
       refreshEntries(false).then(function(){ setBusy(false); });
@@ -546,12 +662,12 @@
   }
 
   function handleExportClick(){
-    var rows = [['日付','JANコード','商品名','サイズ','カラー','単価(税込)','単価(税抜)','数量','金額(税込)']];
+    var rows = [['日付','JANコード','品番','商品名','サイズ','カラー','単価(税込)','単価(税抜)','数量','金額(税込)']];
     var sorted = entries.slice().sort(function(a,b){
       return String(a.date).localeCompare(String(b.date)) || a.ts-b.ts;
     });
     sorted.forEach(function(e){
-      rows.push([e.date, e.jan, e.name, e.size, e.color, e.priceIncl, e.priceExcl, e.qty, e.amount]);
+      rows.push([e.date, e.jan, e.hinban, e.name, e.size, e.color, e.priceIncl, e.priceExcl, e.qty, e.amount]);
     });
     var csv = rows.map(function(r){ return r.map(csvCell).join(','); }).join('\r\n');
     var blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
@@ -606,7 +722,7 @@
     document.getElementById('jan-input').value = jan;
     if (navigator.vibrate) navigator.vibrate(80);
     handleJanInput();
-    document.getElementById('name-input').focus();
+    document.getElementById('hinban-input').focus();
   }
 
   document.getElementById('qty-minus').addEventListener('click', function(){ if(currentQty>1){ currentQty--; renderQty(); } });
@@ -617,6 +733,9 @@
   document.getElementById('add-btn').addEventListener('click', handleAddClick);
   document.getElementById('scan-open').addEventListener('click', openScanner);
   document.getElementById('scan-cancel').addEventListener('click', closeScanner);
+  document.getElementById('tagphoto-open').addEventListener('click', function(){ document.getElementById('tagphoto-input').click(); });
+  document.getElementById('tagphoto-input').addEventListener('change', handleTagPhotoChange);
+  document.getElementById('ocr-result-close').addEventListener('click', hideOcrResult);
   document.getElementById('export-btn').addEventListener('click', handleExportClick);
   document.getElementById('pin-input').addEventListener('keydown', function(ev){
     if (ev.key === 'Enter') document.getElementById('pin-submit').click();
