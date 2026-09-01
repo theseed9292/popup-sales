@@ -235,11 +235,16 @@
         </div>
       </div>
 
-      <div class="field">
-        <label for="price-input">単価（税込み・タグの価格）</label>
-        <input type="number" id="price-input" inputmode="decimal" placeholder="例：3300" min="0">
+      <div class="field-row">
+        <div class="field">
+          <label for="price-input">単価（税込み・タグの価格）</label>
+          <input type="number" id="price-input" inputmode="decimal" placeholder="例：3300" min="0">
+        </div>
+        <div class="field">
+          <label for="price-excl-input">単価（税抜き）</label>
+          <input type="number" id="price-excl-input" inputmode="decimal" placeholder="自動計算" min="0">
+        </div>
       </div>
-      <div class="lookup-preview" id="price-excl-preview"></div>
 
       <div class="field">
         <label>数量</label>
@@ -290,6 +295,7 @@
   var entries = [];
   var selectedDate = null;
   var currentQty = 1;
+  var priceExclManual = false; // 税抜き価格欄をユーザーが直接編集した/OCRで直接読み取った場合はtrue（自動計算で上書きしない）
   var html5QrInstance = null;
   var pollTimer = null;
 
@@ -311,13 +317,10 @@
   function calcExcl(priceIncl){ return Math.round(priceIncl/1.1); }
 
   // ---- タグ撮影OCR（Tesseract.js, ブラウザ内のみで処理・外部送信なし） ----
-  function extractJanFromText(text){
-    var m13 = text.match(/\d{13}/);
-    if (m13) return m13[0];
-    var m8 = text.match(/\b\d{8}\b/);
-    if (m8) return m8[0];
-    return '';
-  }
+  // JANコード（バーコード数字）はOCRでは読み取らない：印字が小さく誤読しやすいうえ、
+  // 誤った数字の並びでもチェックデジット上「たまたま成立してしまう」ことがあり、
+  // 気づかないまま違う商品のJANとして保存されるおそれがあるため。
+  // JANは「バーコードをスキャン」（実際のバーコード読み取り）か手入力を使う。
   function extractHinbanFromText(text){
     var re = /\b[A-Za-z]{1,4}-?\d{5,10}\b/g;
     var m = re.exec(text);
@@ -335,11 +338,101 @@
     }
     return '';
   }
+  function numbersInLine(line){
+    // OCRでは「,」区切りが「.」や空白に化けたり、桁区切りなしになったりするため幅広く許容する
+    var re = /([0-9]{1,3}(?:[,.\x20][0-9]{3})+|[0-9]{3,6})/g;
+    var out = [], m;
+    while ((m = re.exec(line))){
+      var num = parseInt(m[1].replace(/[,.\s]/g, ''), 10);
+      if (isFinite(num) && num>=100 && num<=999999) out.push(num);
+    }
+    return out;
+  }
+  function extractPriceFromText(text){
+    var lines = text.split(/\n/).map(function(l){ return l.trim(); }).filter(function(l){ return l; });
+    // 1)「税込」を含む行（「本体」「税抜」の行は除く）から数値を探す
+    for (var i=0;i<lines.length;i++){
+      if (/税込/.test(lines[i]) && !/本体|税抜/.test(lines[i])){
+        var nums = numbersInLine(lines[i]);
+        if (!nums.length && lines[i+1]) nums = numbersInLine(lines[i+1]);
+        if (nums.length) return nums[0];
+      }
+    }
+    // 2) ¥マークがOCRで「\」等に化けているケースも含めて拾う（本体/税抜の行は除く）
+    for (var j=0;j<lines.length;j++){
+      if (/本体|税抜/.test(lines[j])) continue;
+      var m2 = lines[j].match(/[¥￥\\|]\s*([0-9][0-9,.\x20]{1,7})/) || lines[j].match(/([0-9][0-9,.\x20]{1,7})\s*円/);
+      if (m2){
+        var num2 = parseInt(m2[1].replace(/[,.\s]/g, ''), 10);
+        if (isFinite(num2) && num2>=100 && num2<=999999) return num2;
+      }
+    }
+    return null;
+  }
+  function extractExclPriceFromText(text){
+    // タグに印字された「本体価格」「税抜」の金額をそのまま拾う（税込からの計算値より正確なため優先する）
+    var lines = text.split(/\n/).map(function(l){ return l.trim(); }).filter(function(l){ return l; });
+    for (var i=0;i<lines.length;i++){
+      if (/本体|税抜/.test(lines[i]) && !/税込/.test(lines[i])){
+        var nums = numbersInLine(lines[i]);
+        if (!nums.length && lines[i+1]) nums = numbersInLine(lines[i+1]);
+        if (nums.length) return nums[0];
+      }
+    }
+    return null;
+  }
   function fillFieldIfEmpty(id, value){
     if (!value) return false;
     var el = document.getElementById(id);
     if (el && !el.value.trim()){ el.value = value; return true; }
     return false;
+  }
+  // 撮影した写真をOCR前に軽く前処理する（拡大＋グレースケール＋コントラスト強調）。
+  // 失敗した場合は元の写真をそのままOCRにかける。
+  function preprocessImageForOcr(file){
+    return new Promise(function(resolve, reject){
+      var img = new Image();
+      img.onload = function(){
+        try{
+          var longSide = Math.max(img.naturalWidth||img.width, img.naturalHeight||img.height) || 1;
+          var scale = Math.min(2, Math.max(1, 1600/longSide));
+          var w = Math.round((img.naturalWidth||img.width) * scale);
+          var h = Math.round((img.naturalHeight||img.height) * scale);
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          var imgData = ctx.getImageData(0, 0, w, h);
+          var d = imgData.data;
+          for (var i=0;i<d.length;i+=4){
+            var gray = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+            gray = (gray - 128) * 1.3 + 128;
+            if (gray<0) gray=0; if (gray>255) gray=255;
+            d[i]=d[i+1]=d[i+2]=gray;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          canvas.toBlob(function(blob){
+            if (blob) resolve(blob); else reject(new Error('toBlob failed'));
+          }, 'image/png');
+        }catch(err){ reject(err); }
+      };
+      img.onerror = function(){ reject(new Error('image decode failed')); };
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  function runOcr(input){
+    return Tesseract.createWorker('jpn+eng').then(function(worker){
+      return worker.setParameters({ tessedit_pageseg_mode: '6' })
+        .then(function(){ return worker.recognize(input); })
+        .then(function(result){
+          return worker.terminate().then(function(){
+            return (result && result.data && result.data.text) ? result.data.text : '';
+          });
+        })
+        .catch(function(err){
+          return worker.terminate().then(function(){ throw err; }, function(){ throw err; });
+        });
+    });
   }
   function setOcrStatus(msg, kind){
     var el = document.getElementById('ocr-status');
@@ -365,16 +458,29 @@
     setOcrStatus('文字を読み取っています…（数秒かかります）', '');
     document.getElementById('tagphoto-open').disabled = true;
     document.getElementById('scan-open').disabled = true;
-    Tesseract.recognize(file, 'jpn+eng', {})
-      .then(function(result){
-        var text = (result && result.data && result.data.text) ? result.data.text : '';
-        var jan = extractJanFromText(text);
+    preprocessImageForOcr(file)
+      .catch(function(){ return file; }) // 前処理に失敗しても元の写真でOCRを続ける
+      .then(function(input){ return runOcr(input); })
+      .then(function(text){
+        text = text || '';
         var hinban = extractHinbanFromText(text);
         var size = extractSizeFromText(text);
+        var price = extractPriceFromText(text);
+        var priceExcl = extractExclPriceFromText(text);
         var filledAny = false;
-        if (fillFieldIfEmpty('jan-input', jan)){ handleJanInput(); filledAny = true; }
         if (fillFieldIfEmpty('hinban-input', hinban)) filledAny = true;
         if (fillFieldIfEmpty('size-input', size)) filledAny = true;
+        if (price && fillFieldIfEmpty('price-input', String(price))){
+          filledAny = true;
+          if (priceExcl){
+            setPriceExclValue(String(priceExcl), true); // タグに印字された税抜き価格をそのまま採用（計算値より優先）
+          } else {
+            handlePriceInput(); // 税抜きが読み取れなければ税込みから自動計算する
+          }
+        } else if (priceExcl && !document.getElementById('price-excl-input').value.trim()){
+          setPriceExclValue(String(priceExcl), true);
+          filledAny = true;
+        }
         if (text.trim()) showOcrResult(text.trim());
         updateAddButtonState();
         setOcrStatus(
@@ -569,17 +675,21 @@
     updateAddButtonState();
   }
 
+  function setPriceExclValue(v, manual){
+    document.getElementById('price-excl-input').value = v;
+    priceExclManual = !!manual;
+  }
   function handlePriceInput(){
     var price = Number(document.getElementById('price-input').value);
-    var el = document.getElementById('price-excl-preview');
-    if (price>0){
-      el.className = 'lookup-preview ok';
-      el.innerHTML = '<span>税抜き価格：¥'+calcExcl(price).toLocaleString('ja-JP')+'</span>';
-    } else {
-      el.className = 'lookup-preview';
-      el.innerHTML = '';
+    if (price>0 && !priceExclManual){
+      document.getElementById('price-excl-input').value = calcExcl(price);
     }
     updateAddButtonState();
+  }
+  function handlePriceExclInput(){
+    // ユーザーが税抜き価格欄を直接編集した場合は、以後その値を自動計算で上書きしない。
+    // 空にした場合は自動計算を再開する。
+    priceExclManual = document.getElementById('price-excl-input').value.trim() !== '';
   }
 
   function setBusy(b){
@@ -604,9 +714,10 @@
     var size = document.getElementById('size-input').value.trim();
     var color = document.getElementById('color-input').value.trim();
     var priceIncl = Number(document.getElementById('price-input').value);
+    var priceExclRaw = document.getElementById('price-excl-input').value.trim();
     var qty = currentQty;
     if (!jan || !name || !(priceIncl>0) || !(qty>0)) return;
-    var priceExcl = calcExcl(priceIncl);
+    var priceExcl = priceExclRaw ? Number(priceExclRaw) : calcExcl(priceIncl);
     var entry = {
       id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('e'+Date.now()+Math.random().toString(36).slice(2)),
       date: selectedDate, jan: jan, hinban: hinban, name: name, size: size, color: color,
@@ -626,10 +737,10 @@
       document.getElementById('size-input').value='';
       document.getElementById('color-input').value='';
       document.getElementById('price-input').value='';
+      document.getElementById('price-excl-input').value='';
+      priceExclManual = false;
       document.getElementById('lookup-preview').innerHTML='';
       document.getElementById('lookup-preview').className='lookup-preview';
-      document.getElementById('price-excl-preview').innerHTML='';
-      document.getElementById('price-excl-preview').className='lookup-preview';
       setOcrStatus('');
       hideOcrResult();
       currentQty = 1; renderQty();
@@ -730,6 +841,7 @@
   document.getElementById('jan-input').addEventListener('input', handleJanInput);
   document.getElementById('name-input').addEventListener('input', updateAddButtonState);
   document.getElementById('price-input').addEventListener('input', handlePriceInput);
+  document.getElementById('price-excl-input').addEventListener('input', handlePriceExclInput);
   document.getElementById('add-btn').addEventListener('click', handleAddClick);
   document.getElementById('scan-open').addEventListener('click', openScanner);
   document.getElementById('scan-cancel').addEventListener('click', closeScanner);
