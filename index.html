@@ -142,6 +142,11 @@
   .entry-meta{font-size:11.5px; color:var(--ink-soft); margin:3px 0 0 30px;}
   .entry-sub{font-size:12px; color:var(--ink-soft); margin:2px 0 0 30px;}
   .list-hint{font-size:12px; color:var(--ink-soft); margin:-4px 0 10px;}
+  .finalized-state{border-radius:9px; padding:10px 12px; margin-bottom:10px; font-size:12.5px;
+    background:var(--good-bg); color:var(--good); font-weight:600;}
+  .finalized-state[hidden]{display:none;}
+  .finalized-state.stale{background:var(--bad-bg); color:var(--bad);}
+  .finalized-state a{color:inherit; font-weight:700;}
 
   .entry-row-editing{background:var(--paper); margin:0 -14px; padding:12px 14px; border-bottom-color:transparent;}
   .edit-field-row{display:flex; gap:10px; margin-bottom:10px;}
@@ -186,9 +191,14 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>合言葉を入力してください <span class="app-version mono" id="pin-version">v11</span></h3>
-    <p>本部から共有された合言葉(PIN)を入力すると使えるようになります。</p>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v12</span></h3>
+    <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
+      <label for="store-input">店舗名（必須）</label>
+      <input type="text" id="store-input" placeholder="例：イパネマ" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="pin-input">合言葉（PIN）</label>
       <input type="password" id="pin-input" inputmode="numeric" placeholder="例：1234" autocomplete="off">
     </div>
     <div class="pin-error" id="pin-error"></div>
@@ -200,8 +210,8 @@
   <div class="topbar">
     <div class="brand">
       <h1>POPUP売上</h1>
-      <span class="tag">SP：イパネマ</span>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v11</span>
+      <span class="tag" id="store-tag">店舗未設定</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v12</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -272,6 +282,11 @@
       </div>
 
       <div class="field">
+        <label for="note-input">備考（任意）</label>
+        <input type="text" id="note-input" placeholder="例：サンプル品／お直しあり" autocomplete="off">
+      </div>
+
+      <div class="field">
         <label>数量</label>
         <div class="qty-row">
           <button type="button" class="qty-btn" id="qty-minus" aria-label="数量を減らす">−</button>
@@ -289,6 +304,13 @@
       <h2 id="list-heading">この日の明細</h2>
       <p class="list-hint">内容を間違えた行は「編集」から直せます。</p>
       <div id="entries-list"><p class="empty-state">読み込み中…</p></div>
+    </div>
+
+    <div class="card" id="finalize-card">
+      <h2>売上の確定</h2>
+      <p class="list-hint" id="finalize-hint">確定すると、この日の明細を「店舗名_日付」という名前のスプレッドシートに書き出します。</p>
+      <div class="finalized-state" id="finalized-state" hidden></div>
+      <button type="button" class="add-btn" id="finalize-btn">この日の売上を確定する</button>
     </div>
 
     <div class="card foot-panel">
@@ -320,9 +342,11 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v11';
+  var APP_VERSION = 'v12';
   var POLL_MS = 8000;
   var pin = null;
+  var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
+  var finalizedList = [];   // 確定済みの記録（店舗名・日付ごと）
   var entries = [];
   var selectedDate = null;
   var currentQty = 1;
@@ -879,6 +903,17 @@
   function clearPin(){
     try{ localStorage.removeItem('popupPin'); }catch(e){}
   }
+  function loadStore(){
+    try{ return localStorage.getItem('popupStore') || ''; }catch(e){ return ''; }
+  }
+  function saveStore(s){
+    try{ localStorage.setItem('popupStore', s); }catch(e){}
+  }
+  function setStoreName(s){
+    storeName = String(s || '').trim();
+    var tag = document.getElementById('store-tag');
+    if (tag) tag.textContent = storeName ? storeName : '店舗未設定';
+  }
 
   function startApp(){
     document.getElementById('pin-modal').hidden = true;
@@ -900,7 +935,15 @@
 
   document.getElementById('pin-submit').addEventListener('click', function(){
     var v = document.getElementById('pin-input').value.trim();
-    if (!v){ return; }
+    var s = document.getElementById('store-input').value.trim();
+    if (!s){
+      document.getElementById('pin-error').textContent = '店舗名を入力してください。';
+      return;
+    }
+    if (!v){
+      document.getElementById('pin-error').textContent = '合言葉を入力してください。';
+      return;
+    }
     document.getElementById('pin-error').textContent = '確認しています…';
     document.getElementById('pin-submit').disabled = true;
     apiPost({ pin: v, action: 'verify' }).then(function(json){
@@ -915,6 +958,8 @@
       }
       pin = v;
       savePin(pin);
+      setStoreName(s);
+      saveStore(storeName);
       startApp();
     }).catch(function(err){
       document.getElementById('pin-submit').disabled = false;
@@ -928,8 +973,16 @@
       '接続先URLが未設定です。HTMLファイル内の WEBAPP_URL を書き換えてください。';
   }
 
+  // 前回入力した店舗名を引き継ぐ（入力欄にも入れておき、違う店舗のときは直せるようにする）
+  var savedStore = loadStore();
+  if (savedStore){
+    setStoreName(savedStore);
+    document.getElementById('store-input').value = savedStore;
+  }
+
   var savedPin = loadPin();
-  if (savedPin){
+  // 店舗名が未設定のうちは合言葉を記憶していても入力画面を出す（確定ファイル名に必要なため）
+  if (savedPin && savedStore){
     pin = savedPin;
     startApp();
   }
@@ -967,7 +1020,13 @@
         entries = (json.entries || []).map(function(e){
           e.date = normalizeDateValue(e.date);
           e.jan = (e.jan == null) ? '' : String(e.jan).trim();
+          e.store = (e.store == null) ? '' : String(e.store).trim();
+          e.note = (e.note == null) ? '' : String(e.note);
           return e;
+        });
+        finalizedList = (json.finalized || []).map(function(f){
+          f.date = normalizeDateValue(f.date);
+          return f;
         });
         return entries;
       });
@@ -1001,11 +1060,19 @@
 
   // ---- Derived ----
   function allDates(){
-    var s = new Set(entries.map(function(e){ return e.date; }));
+    var s = new Set(entries.filter(belongsToStore).map(function(e){ return e.date; }));
     s.add(selectedDate);
     return Array.from(s).sort();
   }
-  function entriesForDate(d){ return entries.filter(function(e){ return e.date===d; }); }
+  // この店舗の明細だけを対象にする。
+  // 店舗名が空の行は、店舗名の項目を追加する前に登録された古いデータなので表示に含める。
+  function belongsToStore(e){
+    var s = (e.store || '').trim();
+    return s === '' || s === storeName;
+  }
+  function entriesForDate(d){
+    return entries.filter(function(e){ return e.date===d && belongsToStore(e); });
+  }
   function totalsOf(list){
     var qty=0, amountExcl=0, amountIncl=0;
     for (var i=0;i<list.length;i++){
@@ -1021,6 +1088,7 @@
     renderDayTabs();
     renderTotals();
     renderEntriesList();
+    renderFinalizeState();
   }
 
   function renderDayTabs(){
@@ -1082,6 +1150,7 @@
       + '<div class="entry-meta mono">JAN '+escapeHtml(e.jan)+'</div>'
       + '<div class="entry-sub mono">'+escapeHtml(e.size||'')+' '+escapeHtml(e.color||'')+'</div>'
       + '<div class="entry-sub mono">'+inclText+'税抜¥'+Number(e.priceExcl).toLocaleString('ja-JP')+' × '+e.qty+'</div>'
+      + (e.note ? '<div class="entry-sub">備考：'+escapeHtml(e.note)+'</div>' : '')
       + '</div>';
   }
 
@@ -1103,6 +1172,9 @@
       + '<div class="edit-field-row">'
       +   '<div class="edit-field edit-field-qty"><label>数量</label><input type="number" min="1" id="edit-qty-'+id+'" value="'+(Number(e.qty)||1)+'"></div>'
       + '</div>'
+      + '<div class="edit-field-row">'
+      +   '<div class="edit-field"><label>備考</label><input type="text" id="edit-note-'+id+'" value="'+escapeHtml(e.note||'')+'"></div>'
+      + '</div>'
       + '<div class="edit-actions">'
       +   '<button type="button" class="edit-btn-cancel entry-edit-cancel" data-id="'+id+'">キャンセル</button>'
       +   '<button type="button" class="edit-btn-save entry-edit-save" data-id="'+id+'">保存する</button>'
@@ -1118,6 +1190,8 @@
     var priceInclRaw = document.getElementById('edit-priceincl-'+id).value.trim();
     var priceExclRaw = document.getElementById('edit-priceexcl-'+id).value.trim();
     var qtyRaw = document.getElementById('edit-qty-'+id).value.trim();
+    var noteEl = document.getElementById('edit-note-'+id);
+    var note = noteEl ? noteEl.value.trim() : '';
     var priceIncl = priceInclRaw ? Number(priceInclRaw) : 0;
     var priceExcl = Number(priceExclRaw);
     var qty = Number(qtyRaw);
@@ -1127,7 +1201,7 @@
     }
     var updated = {
       jan: jan, hinban: hinban, size: size, color: color,
-      priceIncl: priceIncl, priceExcl: priceExcl, qty: qty, amount: priceIncl*qty
+      priceIncl: priceIncl, priceExcl: priceExcl, qty: qty, amount: priceIncl*qty, note: note
     };
     var idx = entries.findIndex(function(x){ return String(x.id)===String(id); });
     var previous = idx>=0 ? entries[idx] : null;
@@ -1217,13 +1291,15 @@
     var priceInclRaw = document.getElementById('price-input').value.trim();
     var priceIncl = priceInclRaw ? Number(priceInclRaw) : 0;
     var priceExclRaw = document.getElementById('price-excl-input').value.trim();
+    var note = document.getElementById('note-input').value.trim();
     var qty = currentQty;
     if (!jan || !(Number(priceExclRaw)>0) || !(qty>0)) return;
     var priceExcl = Number(priceExclRaw);
     var entry = {
       id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('e'+Date.now()+Math.random().toString(36).slice(2)),
       date: selectedDate, jan: jan, hinban: hinban, name: '', size: size, color: color,
-      priceIncl: priceIncl, priceExcl: priceExcl, qty: qty, amount: priceIncl*qty, ts: Date.now()
+      priceIncl: priceIncl, priceExcl: priceExcl, qty: qty, amount: priceIncl*qty, ts: Date.now(),
+      store: storeName, note: note
     };
     setBusy(true);
     apiPost({ pin: pin, action: 'add', entry: entry }).then(function(json){
@@ -1242,6 +1318,7 @@
         document.getElementById('color-input').value='';
         document.getElementById('price-input').value='';
         document.getElementById('price-excl-input').value='';
+        document.getElementById('note-input').value='';
         priceExclManual = false;
         document.getElementById('lookup-preview').innerHTML='';
         document.getElementById('lookup-preview').className='lookup-preview';
@@ -1284,25 +1361,93 @@
     });
   }
 
+  // ---- 売上の確定 ----
+  function finalizedRecordFor(date){
+    for (var i=0;i<finalizedList.length;i++){
+      if (finalizedList[i].store === storeName && finalizedList[i].date === date) return finalizedList[i];
+    }
+    return null;
+  }
+  function renderFinalizeState(){
+    var box = document.getElementById('finalized-state');
+    var btn = document.getElementById('finalize-btn');
+    if (!box || !btn) return;
+    var rec = finalizedRecordFor(selectedDate);
+    var list = entriesForDate(selectedDate);
+    btn.disabled = list.length === 0;
+    if (!rec){
+      box.hidden = true;
+      btn.textContent = 'この日の売上を確定する';
+      return;
+    }
+    // 確定したあとに追加・修正された明細があれば、確定し直しが必要だと知らせる。
+    // 件数の違いでも判定するのは、明細の時刻がスマホの時計、確定の時刻がGoogle側の時計と
+    // 別々に付けられるため、時刻の比較だけでは取りこぼす場合があるため。
+    var latestTs = 0;
+    for (var i=0;i<list.length;i++){ latestTs = Math.max(latestTs, Number(list[i].ts)||0); }
+    var stale = (latestTs > (Number(rec.ts)||0)) || (list.length !== (Number(rec.count)||0));
+    var when = new Date(Number(rec.ts)||0);
+    var whenText = isNaN(when.getTime()) ? '' :
+      (when.getMonth()+1) + '月' + when.getDate() + '日 ' +
+      String(when.getHours()).padStart(2,'0') + ':' + String(when.getMinutes()).padStart(2,'0');
+    box.hidden = false;
+    box.className = 'finalized-state' + (stale ? ' stale' : '');
+    box.innerHTML = (stale ? '確定後に変更があります。もう一度確定してください。<br>' : '確定済みです。<br>')
+      + escapeHtml(whenText) + ' 時点 ／ ' + rec.count + '件'
+      + (rec.fileUrl ? ' ／ <a href="'+escapeHtml(rec.fileUrl)+'" target="_blank" rel="noopener">ファイルを開く</a>' : '');
+    btn.textContent = stale ? '確定し直す（上書き）' : 'もう一度確定する（上書き）';
+  }
+
+  function handleFinalizeClick(){
+    var list = entriesForDate(selectedDate);
+    if (list.length === 0){ showToast('この日の明細がありません', 'bad'); return; }
+    if (!storeName){ showToast('店舗名が未設定です', 'bad'); return; }
+    var t = totalsOf(list);
+    var rec = finalizedRecordFor(selectedDate);
+    var msg = storeName + '_' + selectedDate + ' として確定します。\n\n'
+      + '点数：' + t.qty + '　金額（税抜）：¥' + t.amountExcl.toLocaleString('ja-JP') + '\n'
+      + (rec ? '\n※ すでに確定済みです。実行すると同じファイルを最新の内容で上書きします。' : '')
+      + '\nよろしいですか？';
+    if (!window.confirm(msg)) return;
+    var btn = document.getElementById('finalize-btn');
+    btn.disabled = true;
+    btn.textContent = '確定しています…';
+    apiPost({ pin: pin, action: 'finalize', store: storeName, date: selectedDate }).then(function(json){
+      if (!json.ok){
+        if (json.error === 'invalid_pin'){ handlePinRejected(); return; }
+        if (json.error === 'no_entries'){ showToast('この日の明細がありません', 'bad'); }
+        else { showToast('確定に失敗しました（' + (json.error||'不明') + '）', 'bad'); }
+        renderFinalizeState();
+        return;
+      }
+      showToast((json.overwritten ? '確定し直しました：' : '確定しました：') + json.fileName, 'good');
+      refreshEntries(false).then(function(){ renderFinalizeState(); });
+    }).catch(function(err){
+      showToast(describeApiError(err), 'bad');
+      renderFinalizeState();
+    });
+  }
+
   function csvCell(v){
     var s = String(v==null?'':v);
     return /[",\r\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
   }
 
   function handleExportClick(){
-    var rows = [['日付','JANコード','品番','商品名','サイズ','カラー','単価(税込)','単価(税抜)','数量','金額(税込)']];
-    var sorted = entries.slice().sort(function(a,b){
+    var rows = [['日付','店舗名','JANコード','品番','サイズ','カラー','単価(税込)','単価(税抜)','数量','金額(税抜)','金額(税込)','備考']];
+    var sorted = entries.filter(belongsToStore).slice().sort(function(a,b){
       return String(a.date).localeCompare(String(b.date)) || a.ts-b.ts;
     });
     sorted.forEach(function(e){
-      rows.push([e.date, e.jan, e.hinban, e.name, e.size, e.color, e.priceIncl, e.priceExcl, e.qty, e.amount]);
+      rows.push([e.date, e.store || storeName, e.jan, e.hinban, e.size, e.color,
+                 e.priceIncl, e.priceExcl, e.qty, (Number(e.priceExcl)||0)*(Number(e.qty)||0), e.amount, e.note||'']);
     });
     var csv = rows.map(function(r){ return r.map(csvCell).join(','); }).join('\r\n');
     var blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'popup_sales_'+todayStr()+'.csv';
+    a.download = (storeName ? storeName+'_' : '') + 'popup_sales_' + todayStr() + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1367,6 +1512,7 @@
   document.getElementById('export-btn').addEventListener('click', handleExportClick);
   document.getElementById('nav-add').addEventListener('click', function(){ setScreen('add'); });
   document.getElementById('nav-list').addEventListener('click', function(){ setScreen('list'); });
+  document.getElementById('finalize-btn').addEventListener('click', handleFinalizeClick);
   document.getElementById('pin-input').addEventListener('keydown', function(ev){
     if (ev.key === 'Enter') document.getElementById('pin-submit').click();
   });
