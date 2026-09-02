@@ -186,7 +186,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>合言葉を入力してください <span class="app-version mono" id="pin-version">v10</span></h3>
+    <h3>合言葉を入力してください <span class="app-version mono" id="pin-version">v11</span></h3>
     <p>本部から共有された合言葉(PIN)を入力すると使えるようになります。</p>
     <div class="field">
       <input type="password" id="pin-input" inputmode="numeric" placeholder="例：1234" autocomplete="off">
@@ -201,7 +201,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <span class="tag">SP：イパネマ</span>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v10</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v11</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -316,11 +316,11 @@
   "use strict";
 
   // ↓↓↓ Google Apps Script のウェブアプリURLに書き換えてください ↓↓↓
-  var WEBAPP_URL = "https://script.google.com/macros/library/d/1TdP_khQMDJYTcRpxTM6-UHE4LUVvn_lyQPGi2CCQEPq2xtExRLrGhtw5/9";
+  var WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxVAWzUSflGwrXC2VS0B8q0M-ZmRtfOdHnKAidle3PIJg5iglUc1Ln5nhuWR-NnWE7g/exec";
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v10';
+  var APP_VERSION = 'v11';
   var POLL_MS = 8000;
   var pin = null;
   var entries = [];
@@ -909,18 +909,24 @@
         if (json.error === 'invalid_pin'){
           document.getElementById('pin-error').textContent = '合言葉が違います。もう一度入力してください。';
         } else {
-          document.getElementById('pin-error').textContent = '通信エラーです。URLの設定をご確認ください。';
+          document.getElementById('pin-error').textContent = '保管庫からエラーが返りました（' + (json.error || '不明') + '）。';
         }
         return;
       }
       pin = v;
       savePin(pin);
       startApp();
-    }).catch(function(){
+    }).catch(function(err){
       document.getElementById('pin-submit').disabled = false;
-      document.getElementById('pin-error').textContent = '通信エラーです。URLの設定をご確認ください。';
+      document.getElementById('pin-error').textContent = describeApiError(err);
     });
   });
+
+  // 接続先URLの書き換え忘れは、合言葉が記憶されていると保存時まで気づけないため、開いた時点で知らせる
+  if (!webappUrlReady()){
+    document.getElementById('pin-error').textContent =
+      '接続先URLが未設定です。HTMLファイル内の WEBAPP_URL を書き換えてください。';
+  }
 
   var savedPin = loadPin();
   if (savedPin){
@@ -929,10 +935,33 @@
   }
 
   // ---- API ----
+  // WEBAPP_URLの書き換え忘れは「通信エラー」と見分けがつきにくいため、最初に判定しておく
+  // 注意：ここに書き換え前の目印文字列そのものを書かないこと。
+  // テキストエディタの「すべて置換」でこの判定式まで一緒に書き換わり、
+  // URLを正しく設定しても「未設定」と誤判定されてしまうため、URLの形かどうかだけで判定する。
+  function webappUrlReady(){
+    return /^https?:\/\/\S+$/.test(String(WEBAPP_URL || '').trim());
+  }
+  function describeApiError(err){
+    var msg = (err && err.message) ? String(err.message) : '';
+    if (msg === 'url_not_set'){
+      return 'アプリの接続先URLが未設定です。HTMLファイル内の WEBAPP_URL をご確認ください。';
+    }
+    if (msg.indexOf('http_') === 0){
+      return '保管庫に接続できません（' + msg.slice(5) + '）。Apps Scriptのデプロイ設定をご確認ください。';
+    }
+    // ネットワーク自体に到達できない場合。Apps Scriptの「アクセスできるユーザー」が
+    // 全員になっていないと、ログイン画面へ転送されてこの状態になる。
+    return '保管庫に接続できません。電波状況と、Apps Scriptのデプロイ設定（アクセスできるユーザー＝全員）をご確認ください。';
+  }
   function apiGet(){
+    if (!webappUrlReady()) return Promise.reject(new Error('url_not_set'));
     var sep = WEBAPP_URL.indexOf('?') >= 0 ? '&' : '?';
     return fetch(WEBAPP_URL + sep + 'mode=data', { method: 'GET' })
-      .then(function(res){ return res.json(); })
+      .then(function(res){
+        if (!res.ok) throw new Error('http_' + res.status);
+        return res.json();
+      })
       .then(function(json){
         if (!json.ok) throw new Error(json.error || 'unknown');
         entries = (json.entries || []).map(function(e){
@@ -945,8 +974,12 @@
   }
 
   function apiPost(body){
+    if (!webappUrlReady()) return Promise.reject(new Error('url_not_set'));
     return fetch(WEBAPP_URL, { method: 'POST', body: JSON.stringify(body) })
-      .then(function(res){ return res.json(); });
+      .then(function(res){
+        if (!res.ok) throw new Error('http_' + res.status);
+        return res.json();
+      });
   }
 
   function refreshEntries(showSpinner){
@@ -954,9 +987,15 @@
     return apiGet().then(function(){
       setSyncState('live');
       render();
-    }).catch(function(){
+    }).catch(function(err){
       setSyncState('');
-      if (showSpinner) showToast('データを取得できませんでした', 'bad');
+      // 接続先URLの未設定など、電波の問題ではない場合は毎回はっきり伝える
+      var msg = (err && err.message) ? String(err.message) : '';
+      if (msg === 'url_not_set' || msg.indexOf('http_') === 0){
+        showToast(describeApiError(err), 'bad');
+      } else if (showSpinner){
+        showToast('データを取得できませんでした', 'bad');
+      }
     });
   }
 
@@ -1194,27 +1233,33 @@
         showToast('保存に失敗しました', 'bad');
         return;
       }
-      document.getElementById('jan-input').value='';
-      document.getElementById('hinban-input').value='';
-      document.getElementById('size-input').value='';
-      document.getElementById('color-input').value='';
-      document.getElementById('price-input').value='';
-      document.getElementById('price-excl-input').value='';
-      priceExclManual = false;
-      document.getElementById('lookup-preview').innerHTML='';
-      document.getElementById('lookup-preview').className='lookup-preview';
-      setOcrStatus('');
-      hideOcrResult();
-      currentQty = 1; renderQty();
-      showToast('追加しました', 'good');
-      // サーバーへの反映を待たず、まずその場で一覧・合計に反映する
-      // （通信が遅い/一時的に失敗しても、追加した内容がすぐ画面に見えるようにするため）
-      entries.push(entry);
-      render();
+      // ここから先は「保存が成功したあとの画面更新」。
+      // ここで例外が起きても通信エラーとは案内しない（二重登録を招くため）。
+      try{
+        document.getElementById('jan-input').value='';
+        document.getElementById('hinban-input').value='';
+        document.getElementById('size-input').value='';
+        document.getElementById('color-input').value='';
+        document.getElementById('price-input').value='';
+        document.getElementById('price-excl-input').value='';
+        priceExclManual = false;
+        document.getElementById('lookup-preview').innerHTML='';
+        document.getElementById('lookup-preview').className='lookup-preview';
+        setOcrStatus('');
+        hideOcrResult();
+        currentQty = 1; renderQty();
+        showToast('追加しました', 'good');
+        // サーバーへの反映を待たず、まずその場で一覧・合計に反映する
+        // （通信が遅い/一時的に失敗しても、追加した内容がすぐ画面に見えるようにするため）
+        entries.push(entry);
+        render();
+      }catch(uiErr){
+        showToast('保存は完了しましたが、画面の更新に失敗しました。再読み込みしてください', 'bad');
+      }
       refreshEntries(false).then(function(){ setBusy(false); });
-    }).catch(function(){
+    }).catch(function(err){
       setBusy(false);
-      showToast('通信エラーです。もう一度お試しください', 'bad');
+      showToast(describeApiError(err), 'bad');
     });
   }
 
