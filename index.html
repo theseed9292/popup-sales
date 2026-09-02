@@ -147,6 +147,15 @@
   .finalized-state[hidden]{display:none;}
   .finalized-state.stale{background:var(--bad-bg); color:var(--bad);}
   .finalized-state a{color:inherit; font-weight:700;}
+  .report-box{background:var(--paper); border:1px solid var(--line); border-radius:9px;
+    padding:10px 12px; margin-top:12px;}
+  .report-box[hidden]{display:none;}
+  .report-label{display:flex; justify-content:space-between; align-items:center;
+    font-size:11px; font-weight:700; color:var(--ink-soft); margin-bottom:6px;}
+  .report-label button{background:var(--ink); color:var(--paper); border:none; border-radius:999px;
+    padding:5px 14px; font-size:12px; font-weight:700;}
+  .report-box pre{white-space:pre-wrap; word-break:break-word; font-size:13px; color:var(--ink);
+    margin:0; font-family:"Noto Sans JP",sans-serif; line-height:1.6;}
 
   .entry-row-editing{background:var(--paper); margin:0 -14px; padding:12px 14px; border-bottom-color:transparent;}
   .edit-field-row{display:flex; gap:10px; margin-bottom:10px;}
@@ -191,7 +200,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v13</span></h3>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v14</span></h3>
     <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
@@ -211,7 +220,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <span class="tag" id="store-tag">店舗未設定</span>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v13</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v14</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -311,6 +320,13 @@
       <p class="list-hint" id="finalize-hint">確定すると、この日の明細を「店舗名_日付」という名前のスプレッドシートに書き出します。</p>
       <div class="finalized-state" id="finalized-state" hidden></div>
       <button type="button" class="add-btn" id="finalize-btn">この日の売上を確定する</button>
+      <div class="report-box" id="report-box" hidden>
+        <div class="report-label">
+          <span>Teams報告用の文面</span>
+          <button type="button" id="report-copy">コピー</button>
+        </div>
+        <pre id="report-text"></pre>
+      </div>
     </div>
 
     <div class="card foot-panel">
@@ -342,7 +358,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v13';
+  var APP_VERSION = 'v14';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -1415,11 +1431,17 @@
     if (!box || !btn) return;
     var rec = finalizedRecordFor(selectedDate);
     var list = entriesForDate(selectedDate);
+    var reportBox = document.getElementById('report-box');
     btn.disabled = list.length === 0;
     if (!rec){
       box.hidden = true;
+      if (reportBox) reportBox.hidden = true;   // 報告文は確定後に出す
       btn.textContent = 'この日の売上を確定する';
       return;
+    }
+    if (reportBox){
+      document.getElementById('report-text').textContent = buildReportText();
+      reportBox.hidden = false;
     }
     // 確定したあとに追加・修正された明細があれば、確定し直しが必要だと知らせる。
     // 件数の違いでも判定するのは、明細の時刻がスマホの時計、確定の時刻がGoogle側の時計と
@@ -1437,6 +1459,56 @@
       + escapeHtml(whenText) + ' 時点 ／ ' + rec.count + '件'
       + (rec.fileUrl ? ' ／ <a href="'+escapeHtml(rec.fileUrl)+'" target="_blank" rel="noopener">ファイルを開く</a>' : '');
     btn.textContent = stale ? '確定し直す（上書き）' : 'もう一度確定する（上書き）';
+  }
+
+  // Teamsに貼り付けるための日次報告の文面を組み立てる
+  function buildReportText(){
+    var list = entriesForDate(selectedDate);
+    var t = totalsOf(list);
+    var parts = String(selectedDate||'').split('-').map(Number);
+    var dateText = (isFinite(parts[0]) && isFinite(parts[1]) && isFinite(parts[2]))
+      ? (parts[0] + '年' + parts[1] + '月' + parts[2] + '日')
+      : String(selectedDate||'');
+    var lines = [
+      '【POPUP売上報告】',
+      '店舗：' + storeName,
+      '日付：' + dateText,
+      '点数：' + t.qty.toLocaleString('ja-JP') + '点',
+      '売上（税抜）：¥' + t.amountExcl.toLocaleString('ja-JP')
+    ];
+    if (t.amountIncl > 0){
+      lines.push('売上（税込）：¥' + t.amountIncl.toLocaleString('ja-JP'));
+    }
+    return lines.join('\n');
+  }
+  function handleReportCopyClick(){
+    var text = document.getElementById('report-text').textContent || '';
+    if (!text){ return; }
+    var fallbackCopy = function(){
+      // クリップボードAPIが使えない環境（古いブラウザなど）向けの手段
+      try{
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(ok ? 'コピーしました。Teamsに貼り付けてください' : '長押しして選択・コピーしてください', ok ? 'good' : 'bad');
+      }catch(err){
+        showToast('長押しして選択・コピーしてください', 'bad');
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){
+        showToast('コピーしました。Teamsに貼り付けてください', 'good');
+      }).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
   }
 
   function handleFinalizeClick(){
@@ -1554,6 +1626,7 @@
   document.getElementById('nav-add').addEventListener('click', function(){ setScreen('add'); });
   document.getElementById('nav-list').addEventListener('click', function(){ setScreen('list'); });
   document.getElementById('finalize-btn').addEventListener('click', handleFinalizeClick);
+  document.getElementById('report-copy').addEventListener('click', handleReportCopyClick);
   document.getElementById('pin-input').addEventListener('keydown', function(ev){
     if (ev.key === 'Enter') document.getElementById('pin-submit').click();
   });
