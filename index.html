@@ -191,7 +191,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v12</span></h3>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v13</span></h3>
     <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
@@ -211,7 +211,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <span class="tag" id="store-tag">店舗未設定</span>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v12</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v13</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -342,7 +342,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v12';
+  var APP_VERSION = 'v13';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -733,13 +733,25 @@
       }).catch(function(){ return ''; });
     }).catch(function(){ return ''; });
   }
+  // 切り出した画像にはバーコードの縞模様も入るため、OCRはそれを数字の羅列として
+  // 読み取ってしまう（「8」「5」「0」…と1桁ずつ並ぶ結果になる）。
+  // 画面にはそのままでは出さず、JANコードになり得る8桁・13桁の数字だけを候補として拾う。
+  function janCandidatesInText_(text){
+    var out = [];
+    var lines = String(text||'').split(/\n/);
+    for (var i=0;i<lines.length;i++){
+      var compact = lines[i].replace(/[^0-9]/g, '');
+      if (compact.length === 8 || compact.length === 13) out.push(compact);
+    }
+    return out;
+  }
   // バーコードの数字をOCRで読む（解読できなかったときの保険）。
   // 切り出し位置を変えながら順に試し、チェックデジットが合った時点で確定する。
   function ocrJanFromWindows_(img){
     var wins = barcodeWindows_(img);
-    var texts = [];
+    var candidates = [];   // 画面に出すのは「JANらしい数字」だけ（縞模様由来のノイズは捨てる）
     var step = function(i){
-      if (i >= wins.length) return Promise.resolve({ jan: '', texts: texts });
+      if (i >= wins.length) return Promise.resolve({ jan: '', candidates: candidates });
       var canvas;
       try{ canvas = cropCanvas_(img, wins[i].y0, wins[i].y1, 1400, true); }
       catch(err){ return step(i+1); }
@@ -750,9 +762,11 @@
         })
         .then(function(text){
           text = (text||'').trim();
-          if (text) texts.push(text);
+          janCandidatesInText_(text).forEach(function(c){
+            if (candidates.indexOf(c) < 0) candidates.push(c);
+          });
           var jan = extractJanFromText(text);
-          if (jan) return { jan: jan, texts: texts };
+          if (jan) return { jan: jan, candidates: candidates };
           return step(i+1);
         })
         .catch(function(){ return step(i+1); });
@@ -812,35 +826,52 @@
       return decodeBarcodeFromPhoto_(file, img).then(function(decoded){
         if (janLooksValid(decoded)) return { jan: decoded, decoded: true, texts: [] };
         return ocrJanFromWindows_(img).then(function(r){
-          return { jan: r.jan, decoded: false, texts: r.texts };
+          return { jan: r.jan, decoded: false, candidates: r.candidates || [] };
         });
       });
     }).catch(function(){
       // 写真を画像として読み込めない環境（HEICなど）でも、解読と数字OCRだけは試す
       return decodeBarcodeFromPhoto_(file, null).then(function(decoded){
-        if (janLooksValid(decoded)) return { jan: decoded, decoded: true, texts: [] };
+        if (janLooksValid(decoded)) return { jan: decoded, decoded: true, candidates: [] };
         return runOcr(file, { langs: 'eng', psm: '6', whitelist: '0123456789' })
           .then(function(t){
             t = (t||'').trim();
-            return { jan: extractJanFromText(t), decoded: false, texts: t ? [t] : [] };
+            return { jan: extractJanFromText(t), decoded: false, candidates: janCandidatesInText_(t) };
           })
-          .catch(function(){ return { jan: '', decoded: false, texts: [] }; });
-      }).catch(function(){ return { jan: '', decoded: false, texts: [] }; });
+          .catch(function(){ return { jan: '', decoded: false, candidates: [] }; });
+      }).catch(function(){ return { jan: '', decoded: false, candidates: [] }; });
     });
     Promise.all([generalTextP, janResultP])
       .then(function(results){
         var generalText = results[0] || '';
-        var janResult = results[1] || { jan: '', decoded: false, texts: [] };
-        var barcodeText = (janResult.texts || []).join('\n').trim();
+        var janResult = results[1] || { jan: '', decoded: false, candidates: [] };
         var decodedJan = janResult.decoded ? janResult.jan : '';
-        var text = generalText + (barcodeText ? ('\n' + barcodeText) : '');
+        // 品番・サイズ・価格は写真全体の文字から拾う（バーコード側の数字は混ぜない）
+        var text = generalText;
         var hinban = extractHinbanFromText(text);
         var size = extractSizeFromText(text);
         var price = extractPriceFromText(text);
         var priceExcl = extractExclPriceFromText(text);
         // バーコードを解読できた場合はその値を使う（OCRの数字読み取りより正確なため）
-        var jan = janLooksValid(decodedJan) ? decodedJan : extractJanFromText(text);
-        if (decodedJan && janLooksValid(decodedJan)) text = text + '\n（バーコード解読）' + decodedJan;
+        var jan = janLooksValid(janResult.jan) ? janResult.jan : '';
+        var janSource = jan ? (janResult.decoded ? 'decoded' : 'ocr') : '';
+
+        // 参考表示は「読み取れた意味のある内容」だけにする。
+        // バーコードの縞模様をOCRが数字として読んだノイズは表示しない。
+        var refLines = [];
+        if (text.trim()) refLines.push(text.trim());
+        if (janSource === 'decoded'){
+          refLines.push('（バーコード解読）' + jan);
+        } else if (janSource === 'ocr'){
+          refLines.push('（バーコードの数字を読み取り）' + jan);
+        } else {
+          var rejected = (janResult.candidates || []).filter(function(c){ return c !== jan; });
+          if (rejected.length){
+            refLines.push('（読み取れた数字：チェックデジットが合わないため未採用）\n' + rejected.join('\n'));
+          }
+        }
+        var refText = refLines.join('\n');
+
         var filledAny = false;
         if (fillFieldIfEmpty('jan-input', jan)){ filledAny = true; handleJanInput(); }
         if (fillFieldIfEmpty('hinban-input', hinban)) filledAny = true;
@@ -856,12 +887,22 @@
           setPriceExclValue(String(priceExcl), true);
           filledAny = true;
         }
-        if (text.trim()) showOcrResult(text.trim());
+        if (refText.trim()) showOcrResult(refText.trim());
         updateAddButtonState();
-        setOcrStatus(
-          filledAny ? '一部の項目を自動入力しました。内容をご確認のうえ、残りをご入力ください。' : '自動入力できませんでした。下の読み取り結果を見ながらご入力ください。',
-          filledAny ? 'ok' : 'bad'
-        );
+        // JANコードは必須項目なので、読み取れたかどうかをはっきり伝える
+        var janMsg;
+        if (janSource === 'decoded'){
+          janMsg = 'JANコードはバーコードを解読して入力しました。';
+        } else if (janSource === 'ocr'){
+          janMsg = 'JANコードは写真の数字から読み取りました。念のためご確認ください。';
+        } else {
+          janMsg = 'JANコードは読み取れませんでした。「バーコードをスキャン」か手入力をご利用ください。';
+        }
+        if (filledAny){
+          setOcrStatus(janMsg + '（他の項目も自動入力しています。内容をご確認ください）', janSource ? 'ok' : 'bad');
+        } else {
+          setOcrStatus(janMsg, 'bad');
+        }
       })
       .catch(function(){
         setOcrStatus('読み取りに失敗しました。手入力をご利用ください。', 'bad');
