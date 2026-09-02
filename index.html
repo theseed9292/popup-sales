@@ -55,6 +55,8 @@
   .brand h1{font-size:19px; font-weight:900; letter-spacing:.01em;}
   .brand .tag{font-size:11px; font-weight:700; color:var(--ink-soft); border:1px solid var(--line);
     border-radius:999px; padding:2px 8px; letter-spacing:.03em;}
+  .app-version{font-size:11px; font-weight:700; color:var(--accent-ink); background:var(--accent);
+    border-radius:999px; padding:2px 8px; letter-spacing:.03em;}
   .sync-dot{width:7px; height:7px; border-radius:50%; background:var(--line); flex:0 0 auto; margin-left:auto;}
   .sync-dot.live{background:var(--good);}
   .sync-dot.busy{background:var(--accent);}
@@ -72,6 +74,12 @@
   .totals-cell .value{font-size:26px; font-weight:700; margin-top:2px;}
   .totals-cell .value-sub{font-size:12px; font-weight:600; color:var(--ink-soft); margin-top:1px;}
   .totals-cell.amount .value{color:var(--accent);}
+
+  .screen-nav{display:flex; gap:6px; margin:0 0 12px;}
+  .screen-nav-btn{flex:1; padding:10px; border-radius:9px; border:1px solid var(--line);
+    background:var(--surface); color:var(--ink-soft); font-size:13px; font-weight:700;}
+  .screen-nav-btn.active{background:var(--ink); color:var(--paper); border-color:var(--ink);}
+  .screen[hidden]{display:none;}
 
   .content{padding:14px 16px 90px; flex:1;}
   .card{background:var(--surface); border:1px solid var(--line); border-radius:14px;
@@ -129,8 +137,23 @@
   .entry-amount{font-size:14px; font-weight:700; flex:0 0 auto; white-space:nowrap;}
   .entry-del{width:26px; height:26px; border-radius:50%; border:1px solid var(--line);
     background:var(--surface); color:var(--ink-soft); font-size:15px; line-height:1; flex:0 0 auto;}
+  .entry-edit-open{padding:5px 12px; border-radius:999px; border:1px solid var(--accent);
+    background:var(--surface); color:var(--accent); font-size:12px; font-weight:700; flex:0 0 auto;}
   .entry-meta{font-size:11.5px; color:var(--ink-soft); margin:3px 0 0 30px;}
   .entry-sub{font-size:12px; color:var(--ink-soft); margin:2px 0 0 30px;}
+  .list-hint{font-size:12px; color:var(--ink-soft); margin:-4px 0 10px;}
+
+  .entry-row-editing{background:var(--paper); margin:0 -14px; padding:12px 14px; border-bottom-color:transparent;}
+  .edit-field-row{display:flex; gap:10px; margin-bottom:10px;}
+  .edit-field{flex:1; min-width:0;}
+  .edit-field label{display:block; font-size:11px; font-weight:700; color:var(--ink-soft); margin-bottom:4px;}
+  .edit-field input{width:100%; padding:9px 10px; border-radius:8px; border:1px solid var(--line);
+    background:var(--surface); color:var(--ink); font-size:14px;}
+  .edit-field-qty{max-width:120px;}
+  .edit-actions{display:flex; gap:8px; margin-top:2px;}
+  .edit-btn-cancel,.edit-btn-save{flex:1; padding:10px; border-radius:9px; font-size:13px; font-weight:700; border:1px solid var(--line);}
+  .edit-btn-cancel{background:var(--surface); color:var(--ink-soft);}
+  .edit-btn-save{background:var(--ink); color:var(--paper); border-color:var(--ink);}
 
   .foot-panel{display:flex; align-items:center; justify-content:space-between; gap:10px;
     color:var(--ink-soft); font-size:12px;}
@@ -163,7 +186,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>合言葉を入力してください</h3>
+    <h3>合言葉を入力してください <span class="app-version mono" id="pin-version">v10</span></h3>
     <p>本部から共有された合言葉(PIN)を入力すると使えるようになります。</p>
     <div class="field">
       <input type="password" id="pin-input" inputmode="numeric" placeholder="例：1234" autocomplete="off">
@@ -178,6 +201,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <span class="tag">SP：イパネマ</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v10</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -185,9 +209,14 @@
       <div class="totals-cell"><div class="label">合計点数</div><div class="value mono" id="total-qty">0</div></div>
       <div class="totals-cell amount"><div class="label">合計金額（税抜）</div><div class="value mono" id="total-amount">¥0</div><div class="value-sub mono" id="total-amount-incl">税込¥0</div></div>
     </div>
+    <div class="screen-nav">
+      <button type="button" class="screen-nav-btn active" id="nav-add">追加する</button>
+      <button type="button" class="screen-nav-btn" id="nav-list">一覧・編集</button>
+    </div>
   </div>
 
   <div class="content">
+    <div class="screen" id="screen-add">
     <div class="card" id="add-panel">
       <h2>売れた商品を追加</h2>
       <button type="button" class="scan-btn" id="scan-open">
@@ -253,15 +282,19 @@
 
       <button type="button" class="add-btn" id="add-btn" disabled>追加する</button>
     </div>
+    </div>
 
+    <div class="screen" id="screen-list" hidden>
     <div class="card">
       <h2 id="list-heading">この日の明細</h2>
+      <p class="list-hint">内容を間違えた行は「編集」から直せます。</p>
       <div id="entries-list"><p class="empty-state">読み込み中…</p></div>
     </div>
 
     <div class="card foot-panel">
       <span>本社の方へ：JANコード明細をCSVで取得できます</span>
       <button type="button" class="export-btn" id="export-btn">CSVを出力</button>
+    </div>
     </div>
   </div>
 </div>
@@ -283,9 +316,11 @@
   "use strict";
 
   // ↓↓↓ Google Apps Script のウェブアプリURLに書き換えてください ↓↓↓
-  var WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxVAWzUSflGwrXC2VS0B8q0M-ZmRtfOdHnKAidle3PIJg5iglUc1Ln5nhuWR-NnWE7g/exec";
+  var WEBAPP_URL = "https://script.google.com/macros/library/d/1TdP_khQMDJYTcRpxTM6-UHE4LUVvn_lyQPGi2CCQEPq2xtExRLrGhtw5/9";
   // ↑↑↑ ここまで ↑↑↑
 
+  // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
+  var APP_VERSION = 'v10';
   var POLL_MS = 8000;
   var pin = null;
   var entries = [];
@@ -294,14 +329,37 @@
   var priceExclManual = false; // 税抜き価格欄をユーザーが直接編集した/OCRで直接読み取った場合はtrue（自動計算で上書きしない）
   var html5QrInstance = null;
   var pollTimer = null;
+  var editingId = null; // 一覧・編集画面で現在編集中の行のID（未編集ならnull）
+  var currentScreen = 'add'; // 'add'（追加画面）または 'list'（一覧・編集画面）
 
   function todayStr(){
     var d = new Date(), p = function(n){ return String(n).padStart(2,'0'); };
     return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
   }
+  function fmtDateStr(d){
+    var p = function(n){ return String(n).padStart(2,'0'); };
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+  }
+  // スプレッドシートが日付文字列を「日付型」に変換してしまうと、
+  // サーバーからは "2026-09-01T15:00:00.000Z" のような形で返ってくることがある。
+  // そのままだと日付タブが「9月NaN日」になり、その日の明細として集計されなくなるため、
+  // 受け取った時点で必ず "YYYY-MM-DD"（端末のローカル日付）に正規化する。
+  function normalizeDateValue(v){
+    if (v == null) return '';
+    if (typeof v === 'string'){
+      var s = v.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      var parsed = new Date(s);
+      if (!isNaN(parsed.getTime())) return fmtDateStr(parsed);
+      return s;
+    }
+    var d2 = new Date(v);
+    return isNaN(d2.getTime()) ? String(v) : fmtDateStr(d2);
+  }
   function fmtDateLabel(dstr){
-    var parts = dstr.split('-').map(Number);
+    var parts = String(dstr||'').split('-').map(Number);
     var isToday = dstr === todayStr();
+    if (!isFinite(parts[1]) || !isFinite(parts[2])) return String(dstr||'日付不明');
     return (isToday?'本日 ':'') + parts[1] + '月' + parts[2] + '日';
   }
   function escapeHtml(s){
@@ -403,6 +461,18 @@
         if (nums.length) return nums[0];
       }
     }
+    // 「本体価格」の文字がOCRで化けている場合の保険：
+    // 日本のタグでは本体価格が「( 本体価格 ¥3,000 )」のようにカッコ書きされることが多いため、
+    // カッコを含む行の金額を本体価格とみなす（「税込」の行は除く）。
+    for (var j=0;j<lines.length;j++){
+      if (/税込/.test(lines[j])) continue;
+      if (!/[（(]|[）)]/.test(lines[j])) continue;
+      var m = lines[j].match(/[¥￥\\|]\s*([0-9][0-9,.\x20]{1,7})/) || lines[j].match(/([0-9][0-9,.\x20]{1,7})\s*円/);
+      if (m){
+        var num = parseInt(m[1].replace(/[,.\s]/g, ''), 10);
+        if (isFinite(num) && num>=100 && num<=999999) return num;
+      }
+    }
     return null;
   }
   function fillFieldIfEmpty(id, value){
@@ -411,42 +481,267 @@
     if (el && !el.value.trim()){ el.value = value; return true; }
     return false;
   }
-  // 撮影した写真をOCR前に軽く前処理する（拡大＋グレースケール＋コントラスト強調）。
-  // 失敗した場合は元の写真をそのままOCRにかける。
-  function preprocessImageForOcr(file){
+  // ---- 画像の前処理（拡大・シャープ化・二値化） ----
+  // 実際のタグ写真で検証したところ、単純なコントラスト強調よりも
+  // 「シャープ化＋大津の二値化（白黒はっきりさせる）」の方が文字・数字とも読み取り精度が高かった。
+  function loadImageEl_(file){
     return new Promise(function(resolve, reject){
       var img = new Image();
-      img.onload = function(){
-        try{
-          var longSide = Math.max(img.naturalWidth||img.width, img.naturalHeight||img.height) || 1;
-          var scale = Math.min(2, Math.max(1, 1600/longSide));
-          var w = Math.round((img.naturalWidth||img.width) * scale);
-          var h = Math.round((img.naturalHeight||img.height) * scale);
-          var canvas = document.createElement('canvas');
-          canvas.width = w; canvas.height = h;
-          var ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, w, h);
-          var imgData = ctx.getImageData(0, 0, w, h);
-          var d = imgData.data;
-          for (var i=0;i<d.length;i+=4){
-            var gray = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-            gray = (gray - 128) * 1.3 + 128;
-            if (gray<0) gray=0; if (gray>255) gray=255;
-            d[i]=d[i+1]=d[i+2]=gray;
-          }
-          ctx.putImageData(imgData, 0, 0);
-          canvas.toBlob(function(blob){
-            if (blob) resolve(blob); else reject(new Error('toBlob failed'));
-          }, 'image/png');
-        }catch(err){ reject(err); }
-      };
+      img.onload = function(){ resolve(img); };
       img.onerror = function(){ reject(new Error('image decode failed')); };
       img.src = URL.createObjectURL(file);
     });
   }
-  function runOcr(input){
-    return Tesseract.createWorker('jpn+eng').then(function(worker){
-      return worker.setParameters({ tessedit_pageseg_mode: '6' })
+  function computeOtsuThreshold_(gray){
+    var hist = new Array(256).fill(0);
+    for (var i=0;i<gray.length;i++){ hist[gray[i]]++; }
+    var total = gray.length;
+    var sumAll = 0;
+    for (var t=0;t<256;t++) sumAll += t*hist[t];
+    var sumB=0, wB=0, maxVar=0, threshold=127;
+    for (var t2=0;t2<256;t2++){
+      wB += hist[t2];
+      if (wB===0) continue;
+      var wF = total - wB;
+      if (wF===0) break;
+      sumB += t2*hist[t2];
+      var mB = sumB/wB, mF = (sumAll-sumB)/wF;
+      var between = wB*wF*(mB-mF)*(mB-mF);
+      if (between>maxVar){ maxVar=between; threshold=t2; }
+    }
+    return threshold;
+  }
+  function boxBlur3_(gray, w, h){
+    var out = new Uint8ClampedArray(gray.length);
+    for (var y=0;y<h;y++){
+      for (var x=0;x<w;x++){
+        var sum=0, count=0;
+        for (var dy=-1;dy<=1;dy++){
+          var yy=y+dy; if (yy<0||yy>=h) continue;
+          var rowBase = yy*w;
+          for (var dx=-1;dx<=1;dx++){
+            var xx=x+dx; if (xx<0||xx>=w) continue;
+            sum += gray[rowBase+xx]; count++;
+          }
+        }
+        out[y*w+x] = sum/count;
+      }
+    }
+    return out;
+  }
+  function unsharpMask_(gray, w, h, amount){
+    var blurred = boxBlur3_(gray, w, h);
+    var out = new Uint8ClampedArray(gray.length);
+    for (var i=0;i<gray.length;i++){
+      out[i] = gray[i] + amount*(gray[i]-blurred[i]);
+    }
+    return out;
+  }
+  // canvasの中身をグレースケール化→シャープ化→大津の二値化して書き戻す
+  function sharpenAndBinarize_(canvas, thresholdBias){
+    var ctx = canvas.getContext('2d');
+    var w = canvas.width, h = canvas.height;
+    var imgData = ctx.getImageData(0, 0, w, h);
+    var d = imgData.data;
+    var gray = new Uint8ClampedArray(w*h);
+    for (var i=0,p=0; i<d.length; i+=4,p++){
+      gray[p] = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+    }
+    gray = unsharpMask_(gray, w, h, 1.5);
+    var threshold = computeOtsuThreshold_(gray) + (thresholdBias||0);
+    for (var i2=0,p2=0; i2<d.length; i2+=4,p2++){
+      var v = gray[p2] > threshold ? 255 : 0;
+      d[i2]=d[i2+1]=d[i2+2]=v;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return canvas;
+  }
+  function canvasToBlob_(canvas){
+    return new Promise(function(resolve, reject){
+      canvas.toBlob(function(blob){
+        if (blob) resolve(blob); else reject(new Error('toBlob failed'));
+      }, 'image/png');
+    });
+  }
+  // 一般用の前処理：写真全体を拡大し、シャープ化＋二値化する（品番・サイズ・カラー・価格の読み取り用）
+  function preprocessGeneral(file){
+    return loadImageEl_(file).then(function(img){
+      var w = img.naturalWidth||img.width, h = img.naturalHeight||img.height;
+      var longSide = Math.max(w, h) || 1;
+      var scale = Math.min(2.5, Math.max(1, 2000/longSide));
+      var dw = Math.round(w*scale), dh = Math.round(h*scale);
+      var canvas = document.createElement('canvas');
+      canvas.width = dw; canvas.height = dh;
+      canvas.getContext('2d').drawImage(img, 0, 0, dw, dh);
+      sharpenAndBinarize_(canvas, 0);
+      return canvasToBlob_(canvas);
+    });
+  }
+  // ---- バーコード位置の自動検出 ----
+  // バーコードは「縦線が密に並んだ帯」なので、横方向の輝度変化が最も激しい行の帯を探せば位置が分かる。
+  // タグ写真の写り方（余白の量）は毎回違うため、固定位置で切り出すと外すことがある。それを避けるための処理。
+  function findBarcodeBand_(img){
+    try{
+      var sw = 600;
+      var scale = Math.min(1, sw/(img.naturalWidth||img.width));
+      var w = Math.max(1, Math.round((img.naturalWidth||img.width)*scale));
+      var h = Math.max(1, Math.round((img.naturalHeight||img.height)*scale));
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      var d = c.getContext('2d').getImageData(0,0,w,h).data;
+      var rowScore = new Float64Array(h);
+      for (var y=0;y<h;y++){
+        var count = 0, base = y*w*4;
+        for (var x=1;x<w;x++){
+          var i = base + x*4, j = i - 4;
+          var g1 = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+          var g0 = 0.299*d[j] + 0.587*d[j+1] + 0.114*d[j+2];
+          if (Math.abs(g1-g0) > 40) count++;
+        }
+        rowScore[y] = count;
+      }
+      // 平滑化（画像の高さの約2%の窓で移動平均）
+      var k = Math.max(3, Math.round(h*0.02));
+      var sm = new Float64Array(h);
+      for (var y2=0;y2<h;y2++){
+        var s=0, n=0;
+        for (var t=y2-Math.floor(k/2); t<=y2+Math.floor(k/2); t++){
+          if (t>=0 && t<h){ s+=rowScore[t]; n++; }
+        }
+        sm[y2] = n ? s/n : 0;
+      }
+      var peak=0, peakIdx=0;
+      for (var y3=0;y3<h;y3++){ if (sm[y3]>peak){ peak=sm[y3]; peakIdx=y3; } }
+      if (peak <= 0) return null;
+      var thr = peak*0.45, top=peakIdx, bot=peakIdx;
+      while (top-1>=0 && sm[top-1]>=thr) top--;
+      while (bot+1<h && sm[bot+1]>=thr) bot++;
+      // 元画像の座標に戻す
+      var ratio = (img.naturalHeight||img.height)/h;
+      return { top: Math.round(top*ratio), bottom: Math.round(bot*ratio) };
+    }catch(err){ return null; }
+  }
+  // バーコードの数字が写っていそうな範囲の候補を、可能性の高い順に並べて返す
+  function barcodeWindows_(img){
+    var h = img.naturalHeight||img.height;
+    var wins = [];
+    var band = findBarcodeBand_(img);
+    if (band){
+      var barh = Math.max(1, band.bottom - band.top);
+      wins.push({ y0: band.bottom - barh*0.02, y1: band.bottom + barh*0.50 });
+      wins.push({ y0: band.bottom - barh*0.05, y1: band.bottom + barh*0.70 });
+      wins.push({ y0: band.bottom - barh*0.10, y1: band.bottom + barh*0.60 });
+      wins.push({ y0: band.top - barh*0.10, y1: band.bottom + barh*0.80 });
+    }
+    wins.push({ y0: h*0.75, y1: h });      // 写真下部（従来の固定範囲。実機の写真で有効だった）
+    wins.push({ y0: h*0.70, y1: h*0.95 });
+    return wins;
+  }
+  function cropCanvas_(img, y0, y1, targetWidth, binarize){
+    var w = img.naturalWidth||img.width, h = img.naturalHeight||img.height;
+    var sy = Math.max(0, Math.min(h-1, Math.round(y0)));
+    var sh = Math.max(1, Math.min(h - sy, Math.round(y1 - y0)));
+    var scale = Math.max(1, targetWidth/w);
+    var dw = Math.round(w*scale), dh = Math.round(sh*scale);
+    var canvas = document.createElement('canvas');
+    canvas.width = dw; canvas.height = dh;
+    canvas.getContext('2d').drawImage(img, 0, sy, w, sh, 0, 0, dw, dh);
+    if (binarize) sharpenAndBinarize_(canvas, 0);
+    return canvas;
+  }
+  function canvasToFile_(canvas, name){
+    return canvasToBlob_(canvas).then(function(blob){
+      try{ return new File([blob], name, { type: 'image/png' }); }
+      catch(err){ return blob; } // File未対応環境では素のBlobを返す
+    });
+  }
+  // 写真に写っているバーコードそのものを解読する（OCRで数字を読むより格段に正確）。
+  // 「バーコードをスキャン」と同じ解読エンジンを、撮影済みの写真に対して使う。
+  // ライブラリは1回しか解読を試さないため、写真全体とバーコード付近の拡大の両方を順に試す。
+  function decodeBarcodeOnce_(fileLike){
+    return new Promise(function(resolve){
+      if (typeof Html5Qrcode === 'undefined' || typeof File === 'undefined'){ resolve(''); return; }
+      // scanFileはFileインスタンスしか受け付けないため、Blobのままでは渡せない
+      if (!(fileLike instanceof File)){ resolve(''); return; }
+      var holder = document.getElementById('barcode-file-region');
+      if (!holder){
+        holder = document.createElement('div');
+        holder.id = 'barcode-file-region';
+        // display:none にすると描画用canvasの幅が0になるため、画面外に置く形で隠す
+        holder.style.position = 'fixed';
+        holder.style.left = '-10000px';
+        holder.style.top = '0';
+        holder.style.width = '1000px';
+        holder.style.height = '1000px';
+        document.body.appendChild(holder);
+      }
+      var inst;
+      try{
+        inst = new Html5Qrcode('barcode-file-region', {
+          formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.UPC_A],
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true }, // 対応端末では端末内蔵の解読機能を使う
+          verbose: false
+        });
+      }catch(err){ resolve(''); return; }
+      var done = function(value){
+        try{ inst.clear(); }catch(e){}
+        resolve(value || '');
+      };
+      try{
+        inst.scanFile(fileLike, false).then(function(text){
+          done((text||'').replace(/\D/g,''));
+        }).catch(function(){ done(''); });
+      }catch(err){ done(''); }
+    });
+  }
+  function decodeBarcodeFromPhoto_(file, img){
+    // 1) 写真そのまま → 2) バーコード付近を切り出して拡大、の順に試す
+    return decodeBarcodeOnce_(file).then(function(v){
+      if (janLooksValid(v)) return v;
+      if (!img) return '';
+      var band = findBarcodeBand_(img);
+      if (!band) return '';
+      var barh = Math.max(1, band.bottom - band.top);
+      var canvas = cropCanvas_(img, band.top - barh*0.6, band.bottom + barh*1.0, 1600, false);
+      return canvasToFile_(canvas, 'barcode.png').then(function(f){
+        return decodeBarcodeOnce_(f);
+      }).catch(function(){ return ''; });
+    }).catch(function(){ return ''; });
+  }
+  // バーコードの数字をOCRで読む（解読できなかったときの保険）。
+  // 切り出し位置を変えながら順に試し、チェックデジットが合った時点で確定する。
+  function ocrJanFromWindows_(img){
+    var wins = barcodeWindows_(img);
+    var texts = [];
+    var step = function(i){
+      if (i >= wins.length) return Promise.resolve({ jan: '', texts: texts });
+      var canvas;
+      try{ canvas = cropCanvas_(img, wins[i].y0, wins[i].y1, 1400, true); }
+      catch(err){ return step(i+1); }
+      return canvasToFile_(canvas, 'strip.png')
+        .then(function(input){
+          // 数字だけを対象にすると誤読が大幅に減る（日本語モデルを混ぜると数字が崩れるため英語のみ）
+          return runOcr(input, { langs: 'eng', psm: '6', whitelist: '0123456789' });
+        })
+        .then(function(text){
+          text = (text||'').trim();
+          if (text) texts.push(text);
+          var jan = extractJanFromText(text);
+          if (jan) return { jan: jan, texts: texts };
+          return step(i+1);
+        })
+        .catch(function(){ return step(i+1); });
+    };
+    return step(0);
+  }
+  function runOcr(input, opts){
+    opts = opts || {};
+    var langs = opts.langs || 'jpn+eng';
+    return Tesseract.createWorker(langs).then(function(worker){
+      var params = { tessedit_pageseg_mode: opts.psm || '6' };
+      if (opts.whitelist) params.tessedit_char_whitelist = opts.whitelist;
+      return worker.setParameters(params)
         .then(function(){ return worker.recognize(input); })
         .then(function(result){
           return worker.terminate().then(function(){
@@ -482,16 +777,46 @@
     setOcrStatus('文字を読み取っています…（数秒かかります）', '');
     document.getElementById('tagphoto-open').disabled = true;
     document.getElementById('scan-open').disabled = true;
-    preprocessImageForOcr(file)
+    // 品番・サイズ・カラー・価格用の読み取り（写真全体）と、
+    // JANコード用の読み取り（バーコード数字の付近を切り出して拡大）を並行して行い、結果を合わせる。
+    var generalTextP = preprocessGeneral(file)
       .catch(function(){ return file; }) // 前処理に失敗しても元の写真でOCRを続ける
-      .then(function(input){ return runOcr(input); })
-      .then(function(text){
-        text = text || '';
-        var jan = extractJanFromText(text);
+      .then(function(input){ return runOcr(input, { langs: 'jpn+eng', psm: '6' }); })
+      .catch(function(){ return ''; });
+    // JANコードは「バーコードそのものの解読」を最優先し、駄目なら数字のOCRに切り替える
+    var janResultP = loadImageEl_(file).then(function(img){
+      return decodeBarcodeFromPhoto_(file, img).then(function(decoded){
+        if (janLooksValid(decoded)) return { jan: decoded, decoded: true, texts: [] };
+        return ocrJanFromWindows_(img).then(function(r){
+          return { jan: r.jan, decoded: false, texts: r.texts };
+        });
+      });
+    }).catch(function(){
+      // 写真を画像として読み込めない環境（HEICなど）でも、解読と数字OCRだけは試す
+      return decodeBarcodeFromPhoto_(file, null).then(function(decoded){
+        if (janLooksValid(decoded)) return { jan: decoded, decoded: true, texts: [] };
+        return runOcr(file, { langs: 'eng', psm: '6', whitelist: '0123456789' })
+          .then(function(t){
+            t = (t||'').trim();
+            return { jan: extractJanFromText(t), decoded: false, texts: t ? [t] : [] };
+          })
+          .catch(function(){ return { jan: '', decoded: false, texts: [] }; });
+      }).catch(function(){ return { jan: '', decoded: false, texts: [] }; });
+    });
+    Promise.all([generalTextP, janResultP])
+      .then(function(results){
+        var generalText = results[0] || '';
+        var janResult = results[1] || { jan: '', decoded: false, texts: [] };
+        var barcodeText = (janResult.texts || []).join('\n').trim();
+        var decodedJan = janResult.decoded ? janResult.jan : '';
+        var text = generalText + (barcodeText ? ('\n' + barcodeText) : '');
         var hinban = extractHinbanFromText(text);
         var size = extractSizeFromText(text);
         var price = extractPriceFromText(text);
         var priceExcl = extractExclPriceFromText(text);
+        // バーコードを解読できた場合はその値を使う（OCRの数字読み取りより正確なため）
+        var jan = janLooksValid(decodedJan) ? decodedJan : extractJanFromText(text);
+        if (decodedJan && janLooksValid(decodedJan)) text = text + '\n（バーコード解読）' + decodedJan;
         var filledAny = false;
         if (fillFieldIfEmpty('jan-input', jan)){ filledAny = true; handleJanInput(); }
         if (fillFieldIfEmpty('hinban-input', hinban)) filledAny = true;
@@ -523,6 +848,12 @@
       });
   }
 
+  // バージョン表示（HTMLにも直接書いてあるので、万一ここが動かなくても表示は残る）
+  ['app-version','pin-version'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.textContent = APP_VERSION;
+  });
+
   selectedDate = todayStr();
 
   function setSyncState(state){
@@ -552,8 +883,19 @@
   function startApp(){
     document.getElementById('pin-modal').hidden = true;
     document.getElementById('app-root').hidden = false;
+    setScreen('add');
     refreshEntries(true);
     pollTimer = setInterval(function(){ refreshEntries(false); }, POLL_MS);
+  }
+
+  // ---- 画面切り替え（追加画面 ⇔ 一覧・編集画面） ----
+  function setScreen(s){
+    currentScreen = s;
+    document.getElementById('screen-add').hidden = (s !== 'add');
+    document.getElementById('screen-list').hidden = (s !== 'list');
+    document.getElementById('nav-add').className = 'screen-nav-btn' + (s==='add' ? ' active' : '');
+    document.getElementById('nav-list').className = 'screen-nav-btn' + (s==='list' ? ' active' : '');
+    if (s === 'list'){ editingId = null; renderEntriesList(); }
   }
 
   document.getElementById('pin-submit').addEventListener('click', function(){
@@ -593,7 +935,11 @@
       .then(function(res){ return res.json(); })
       .then(function(json){
         if (!json.ok) throw new Error(json.error || 'unknown');
-        entries = json.entries || [];
+        entries = (json.entries || []).map(function(e){
+          e.date = normalizeDateValue(e.date);
+          e.jan = (e.jan == null) ? '' : String(e.jan).trim();
+          return e;
+        });
         return entries;
       });
   }
@@ -646,7 +992,7 @@
       return '<button type="button" class="'+cls+'" data-date="'+d+'">'+fmtDateLabel(d)+'</button>';
     }).join('');
     Array.prototype.forEach.call(wrap.querySelectorAll('.day-tab'), function(btn){
-      btn.addEventListener('click', function(){ selectedDate = btn.getAttribute('data-date'); render(); });
+      btn.addEventListener('click', function(){ selectedDate = btn.getAttribute('data-date'); editingId = null; render(); });
     });
   }
 
@@ -666,23 +1012,106 @@
       return;
     }
     el.innerHTML = list.map(function(e,i){
-      var flagged = !janLooksValid(e.jan);
-      var headline = e.hinban ? e.hinban : '(品番未入力)';
-      var inclText = e.priceIncl ? ('税込¥'+Number(e.priceIncl).toLocaleString('ja-JP')+' ・ ') : '';
-      return '<div class="entry-row'+(flagged?' unresolved':'')+'">'
-        + '<div class="entry-top">'
-        + '<span class="entry-no">'+(i+1)+'</span>'
-        + '<span class="entry-name">'+escapeHtml(headline)+'</span>'
-        + '<span class="entry-amount mono">¥'+(Number(e.priceExcl)*Number(e.qty)).toLocaleString('ja-JP')+'</span>'
-        + '<button type="button" class="entry-del" data-id="'+e.id+'" aria-label="削除">×</button>'
-        + '</div>'
-        + '<div class="entry-meta mono">JAN '+escapeHtml(e.jan)+'</div>'
-        + '<div class="entry-sub mono">'+escapeHtml(e.size||'')+' '+escapeHtml(e.color||'')+'</div>'
-        + '<div class="entry-sub mono">'+inclText+'税抜¥'+Number(e.priceExcl).toLocaleString('ja-JP')+' × '+e.qty+'</div>'
-        + '</div>';
+      return (e.id === editingId) ? renderEditRow(e) : renderViewRow(e, i);
     }).join('');
     Array.prototype.forEach.call(el.querySelectorAll('.entry-del'), function(btn){
       btn.addEventListener('click', function(){ handleDeleteClick(btn.getAttribute('data-id')); });
+    });
+    Array.prototype.forEach.call(el.querySelectorAll('.entry-edit-open'), function(btn){
+      btn.addEventListener('click', function(){ editingId = btn.getAttribute('data-id'); renderEntriesList(); });
+    });
+    Array.prototype.forEach.call(el.querySelectorAll('.entry-edit-cancel'), function(btn){
+      btn.addEventListener('click', function(){ editingId = null; renderEntriesList(); });
+    });
+    Array.prototype.forEach.call(el.querySelectorAll('.entry-edit-save'), function(btn){
+      btn.addEventListener('click', function(){ handleEditSaveClick(btn.getAttribute('data-id')); });
+    });
+  }
+
+  function renderViewRow(e, i){
+    var flagged = !janLooksValid(e.jan);
+    var headline = e.hinban ? e.hinban : '(品番未入力)';
+    var inclText = e.priceIncl ? ('税込¥'+Number(e.priceIncl).toLocaleString('ja-JP')+' ・ ') : '';
+    return '<div class="entry-row'+(flagged?' unresolved':'')+'">'
+      + '<div class="entry-top">'
+      + '<span class="entry-no">'+(i+1)+'</span>'
+      + '<span class="entry-name">'+escapeHtml(headline)+'</span>'
+      + '<span class="entry-amount mono">¥'+(Number(e.priceExcl)*Number(e.qty)).toLocaleString('ja-JP')+'</span>'
+      + '<button type="button" class="entry-edit-open" data-id="'+e.id+'" aria-label="編集">編集</button>'
+      + '<button type="button" class="entry-del" data-id="'+e.id+'" aria-label="削除">×</button>'
+      + '</div>'
+      + '<div class="entry-meta mono">JAN '+escapeHtml(e.jan)+'</div>'
+      + '<div class="entry-sub mono">'+escapeHtml(e.size||'')+' '+escapeHtml(e.color||'')+'</div>'
+      + '<div class="entry-sub mono">'+inclText+'税抜¥'+Number(e.priceExcl).toLocaleString('ja-JP')+' × '+e.qty+'</div>'
+      + '</div>';
+  }
+
+  function renderEditRow(e){
+    var id = escapeHtml(e.id);
+    return '<div class="entry-row entry-row-editing">'
+      + '<div class="edit-field-row">'
+      +   '<div class="edit-field"><label>JANコード</label><input type="text" class="mono" id="edit-jan-'+id+'" inputmode="numeric" value="'+escapeHtml(e.jan||'')+'"></div>'
+      +   '<div class="edit-field"><label>品番</label><input type="text" class="mono" id="edit-hinban-'+id+'" value="'+escapeHtml(e.hinban||'')+'"></div>'
+      + '</div>'
+      + '<div class="edit-field-row">'
+      +   '<div class="edit-field"><label>サイズ</label><input type="text" id="edit-size-'+id+'" value="'+escapeHtml(e.size||'')+'"></div>'
+      +   '<div class="edit-field"><label>カラー</label><input type="text" id="edit-color-'+id+'" value="'+escapeHtml(e.color||'')+'"></div>'
+      + '</div>'
+      + '<div class="edit-field-row">'
+      +   '<div class="edit-field"><label>単価（税込）</label><input type="number" inputmode="decimal" min="0" id="edit-priceincl-'+id+'" value="'+(e.priceIncl?Number(e.priceIncl):'')+'"></div>'
+      +   '<div class="edit-field"><label>単価（税抜）</label><input type="number" inputmode="decimal" min="0" id="edit-priceexcl-'+id+'" value="'+(e.priceExcl?Number(e.priceExcl):'')+'"></div>'
+      + '</div>'
+      + '<div class="edit-field-row">'
+      +   '<div class="edit-field edit-field-qty"><label>数量</label><input type="number" min="1" id="edit-qty-'+id+'" value="'+(Number(e.qty)||1)+'"></div>'
+      + '</div>'
+      + '<div class="edit-actions">'
+      +   '<button type="button" class="edit-btn-cancel entry-edit-cancel" data-id="'+id+'">キャンセル</button>'
+      +   '<button type="button" class="edit-btn-save entry-edit-save" data-id="'+id+'">保存する</button>'
+      + '</div>'
+      + '</div>';
+  }
+
+  function handleEditSaveClick(id){
+    var jan = document.getElementById('edit-jan-'+id).value.trim();
+    var hinban = document.getElementById('edit-hinban-'+id).value.trim();
+    var size = document.getElementById('edit-size-'+id).value.trim();
+    var color = document.getElementById('edit-color-'+id).value.trim();
+    var priceInclRaw = document.getElementById('edit-priceincl-'+id).value.trim();
+    var priceExclRaw = document.getElementById('edit-priceexcl-'+id).value.trim();
+    var qtyRaw = document.getElementById('edit-qty-'+id).value.trim();
+    var priceIncl = priceInclRaw ? Number(priceInclRaw) : 0;
+    var priceExcl = Number(priceExclRaw);
+    var qty = Number(qtyRaw);
+    if (!jan || !(priceExcl > 0) || !(qty > 0)){
+      showToast('JANコード・単価（税抜）・数量を確認してください', 'bad');
+      return;
+    }
+    var updated = {
+      jan: jan, hinban: hinban, size: size, color: color,
+      priceIncl: priceIncl, priceExcl: priceExcl, qty: qty, amount: priceIncl*qty
+    };
+    var idx = entries.findIndex(function(x){ return String(x.id)===String(id); });
+    var previous = idx>=0 ? entries[idx] : null;
+    if (idx>=0){
+      var merged = {}; var k;
+      for (k in previous){ merged[k] = previous[k]; }
+      for (k in updated){ merged[k] = updated[k]; }
+      entries[idx] = merged;
+    }
+    editingId = null;
+    render();
+    apiPost({ pin: pin, action: 'update', id: id, entry: updated }).then(function(json){
+      if (!json.ok){
+        if (json.error === 'invalid_pin'){ handlePinRejected(); return; }
+        showToast('更新に失敗しました', 'bad');
+        if (previous && idx>=0){ entries[idx] = previous; render(); }
+        return;
+      }
+      showToast('更新しました', 'good');
+      refreshEntries(false);
+    }).catch(function(){
+      showToast('通信エラーです。もう一度お試しください', 'bad');
+      if (previous && idx>=0){ entries[idx] = previous; render(); }
     });
   }
 
@@ -778,6 +1207,10 @@
       hideOcrResult();
       currentQty = 1; renderQty();
       showToast('追加しました', 'good');
+      // サーバーへの反映を待たず、まずその場で一覧・合計に反映する
+      // （通信が遅い/一時的に失敗しても、追加した内容がすぐ画面に見えるようにするため）
+      entries.push(entry);
+      render();
       refreshEntries(false).then(function(){ setBusy(false); });
     }).catch(function(){
       setBusy(false);
@@ -787,16 +1220,22 @@
 
   function handleDeleteClick(id){
     if (!window.confirm('この行を削除しますか？')) return;
+    var idx = entries.findIndex(function(x){ return x.id===id; });
+    var removed = idx>=0 ? entries.splice(idx,1)[0] : null;
+    if (editingId === id) editingId = null;
+    render();
     apiPost({ pin: pin, action: 'delete', id: id }).then(function(json){
       if (!json.ok){
         if (json.error === 'invalid_pin'){ handlePinRejected(); return; }
         showToast('削除に失敗しました', 'bad');
+        if (removed){ entries.push(removed); render(); }
         return;
       }
       showToast('削除しました', '');
       refreshEntries(false);
     }).catch(function(){
       showToast('通信エラーです', 'bad');
+      if (removed){ entries.push(removed); render(); }
     });
   }
 
@@ -881,6 +1320,8 @@
   document.getElementById('tagphoto-input').addEventListener('change', handleTagPhotoChange);
   document.getElementById('ocr-result-close').addEventListener('click', hideOcrResult);
   document.getElementById('export-btn').addEventListener('click', handleExportClick);
+  document.getElementById('nav-add').addEventListener('click', function(){ setScreen('add'); });
+  document.getElementById('nav-list').addEventListener('click', function(){ setScreen('list'); });
   document.getElementById('pin-input').addEventListener('keydown', function(ev){
     if (ev.key === 'Enter') document.getElementById('pin-submit').click();
   });
