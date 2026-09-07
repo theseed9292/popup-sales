@@ -200,7 +200,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v15</span></h3>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v16</span></h3>
     <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
@@ -220,7 +220,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <span class="tag" id="store-tag">店舗未設定</span>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v15</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v16</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -358,7 +358,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v15';
+  var APP_VERSION = 'v16';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -1182,6 +1182,9 @@
   function allDates(){
     var s = new Set(entries.filter(belongsToStore).map(function(e){ return e.date; }));
     s.add(selectedDate);
+    // 本日のタブは常に出す。これが無いと、本日の明細がまだ無い状態で過去日を選んだとき
+    // 本日のタブ自体が消えてしまい、本日に戻れなくなる。
+    s.add(todayStr());
     return Array.from(s).sort();
   }
   // この店舗の明細だけを対象にする。
@@ -1388,6 +1391,22 @@
     updateAddButtonState();
   }
 
+  // 追加後に画面の一番上へ戻す。長いフォームの下端に取り残されないようにするため。
+  function scrollToAddPanelTop_(){
+    try{
+      var root = document.documentElement;
+      var canSmooth = root && root.style && ('scrollBehavior' in root.style);
+      if (canSmooth && window.scrollTo){
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      // smoothスクロール未対応の端末向け
+      if (window.scrollTo) window.scrollTo(0, 0);
+      if (root) root.scrollTop = 0;
+      if (document.body) document.body.scrollTop = 0;
+    }catch(err){ /* スクロールできなくても処理は続ける */ }
+  }
+
   function setBusy(b){
     var btn = document.getElementById('add-btn');
     btn.textContent = b ? '保存中…' : '追加する';
@@ -1446,6 +1465,8 @@
         hideOcrResult();
         currentQty = 1; renderQty();
         showToast('追加しました', 'good');
+        // 次の商品をすぐ入力できるよう、画面の一番上（「売れた商品を追加」）まで戻す
+        scrollToAddPanelTop_();
         // サーバーへの反映を待たず、まずその場で一覧・合計に反映する
         // （通信が遅い/一時的に失敗しても、追加した内容がすぐ画面に見えるようにするため）
         entries.push(entry);
@@ -1610,13 +1631,13 @@
   }
 
   function handleExportClick(){
-    var rows = [['日付','店舗名','JANコード','品番','サイズ','カラー','単価(税込)','単価(税抜)','数量','金額(税抜)','金額(税込)','備考']];
+    // 確定Excelと同じ並び。「商品名」の列には品番を入れる。
+    var rows = [['JANコード','商品名','サイズ','カラー','数量','本体価格','税込価格','売上日']];
     var sorted = entries.filter(belongsToStore).slice().sort(function(a,b){
       return String(a.date).localeCompare(String(b.date)) || a.ts-b.ts;
     });
     sorted.forEach(function(e){
-      rows.push([e.date, e.store || storeName, e.jan, e.hinban, e.size, e.color,
-                 e.priceIncl, e.priceExcl, e.qty, (Number(e.priceExcl)||0)*(Number(e.qty)||0), e.amount, e.note||'']);
+      rows.push([e.jan, e.hinban, e.size, e.color, e.qty, e.priceExcl, e.priceIncl, e.date]);
     });
     var csv = rows.map(function(r){ return r.map(csvCell).join(','); }).join('\r\n');
     var blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
