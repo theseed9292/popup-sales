@@ -199,8 +199,8 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v25</span></h3>
-    <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v26</span></h3>
+    <p>店舗名は、確定したときのファイル名（店舗名＋日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
       <input type="text" id="store-input" placeholder="例：イパネマ" autocomplete="off">
@@ -219,7 +219,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <button type="button" class="tag tag-btn" id="store-tag" title="タップすると店舗を切り替えられます">店舗未設定</button>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v25</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v26</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -316,7 +316,7 @@
 
     <div class="card" id="finalize-card">
       <h2>売上の確定</h2>
-      <p class="list-hint" id="finalize-hint">確定すると、この日の明細を「店舗名_日付」という名前のスプレッドシートに書き出します。</p>
+      <p class="list-hint" id="finalize-hint">確定すると、この日の明細を「店舗名＋日付」という名前のスプレッドシートに書き出します。</p>
       <div class="finalized-state" id="finalized-state" hidden></div>
       <button type="button" class="add-btn" id="finalize-btn">この日の売上を確定する</button>
       <div class="report-box" id="report-box" hidden>
@@ -353,7 +353,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v25';
+  var APP_VERSION = 'v26';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -1844,7 +1844,8 @@
     if (!storeName){ showToast('店舗名が未設定です', 'bad'); return; }
     var t = totalsOf(list);
     var rec = finalizedRecordFor(selectedDate);
-    var msg = storeName + '_' + selectedDate + ' として確定します。\n\n'
+    // 実際に作られるファイル名と同じ形（店舗名＋日付8桁）で確認する
+    var msg = storeName + selectedDate.replace(/-/g, '') + ' として確定します。\n\n'
       + '点数：' + t.qty + '　金額（税抜）：¥' + t.amountExcl.toLocaleString('ja-JP') + '\n'
       + (rec ? '\n※ すでに確定済みです。実行すると同じファイルを最新の内容で上書きします。' : '')
       + '\nよろしいですか？';
@@ -1869,7 +1870,7 @@
   }
 
   // v17：画面からのCSV出力は廃止しました。
-  // 本部提出用のデータは「売上の確定」で作られるスプレッドシート（店舗名_日付）を
+  // 本部提出用のデータは「売上の確定」で作られるスプレッドシート（店舗名＋日付8桁）を
   // 事務担当がGoogleドライブからExcelでダウンロードする運用に一本化しています。
 
   function openScanner(){
