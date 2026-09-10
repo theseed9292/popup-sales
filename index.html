@@ -199,7 +199,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v22</span></h3>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v23</span></h3>
     <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
@@ -219,7 +219,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <button type="button" class="tag tag-btn" id="store-tag" title="タップすると店舗を切り替えられます">店舗未設定</button>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v22</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v23</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -353,7 +353,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v22';
+  var APP_VERSION = 'v23';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -446,6 +446,88 @@
   // 「Color: 053 BROWN/ROSE」のように色名がラベル付きで印字されているタグから色を拾う。
   // ラベルのない日本語のカラー表記（「ベージュ/シルバー」など）はOCRで崩れやすく、
   // 誤った内容を入れるくらいなら空欄のままにしたいので、ラベル付きだけを対象にする。
+  // ---- カラー名の照合辞書 ----
+  // タグのカラーはカタカナで印字されており、OCRだけでは崩れて読めないことが多い
+  // （例：「ブラック」が「フック」になる）。そこで、自社の商品データに実在する
+  // 色名の一覧と照らし合わせて、最も近いものに直してから採用する。
+  // 組み合わせ（ブラック/オニキス）ではなく単語ごとに持つことで、
+  // 新しい組み合わせの商品が出ても対応できるようにしている。
+  var COLOR_WORDS = [
+    'ピンク','ブラック','ベージュ','グリーン','ブルー','イエロー','ブラウン','ゴールド','ライラック','グレー','レッド','オレンジ','ホワイト',
+    'シルバー','ライトピンク','ブロンズ','タートル','ローズ','クリア','ライトブルー','ダークブルー','コッパー','キャラメル','ライトグリーン',
+    'メタリック','ダークピンク','グリッター','ダークグレー','メタリックピンク','オニキス','バーガンディー','スプラッシュクリアー','ネオンピンク',
+    'グリッターピンク','ダークグリーン','マルチカラー','オフホワイト','カーキ','ライトベージュ','マルチクリア','メタリックゴールド','ネオンイエロー',
+    'パーリーブルー','グリッターブラック','バーガンディ','グリッターグリーン','スモーク','グレイディエント','メタリックシルバー','パープル','ライトライラック',
+    'ネービー','ピンクグリッター','グリッターイエロー','タイル','タートルクリア','クリアブラウン','クリアピンク','ダークブラウン','ベージュグリッター',
+    'ブラックグリッター','トランスイエロー','コッパーメタリック','グリーンパーリー','ブラックメタル','メタリックライアック','ゴールドブラック','サーモンピンク',
+    'ライムイエロー','ライトレッド','グリーングリッター','ライトイエロー','ピンクネオン','ホワイトゴールド','ブラウンタイル','ミリタリーグリーン',
+    'ライラックトランス','ゴールドピンク','ニューグリーン','ニューベージュ','フルアリンピンク','グリッターベージュ','ヘザーローズ','ベージュライト','クリアー',
+    'ブラックシルバー','ブラックブラウン','ネイビー','オレンジネオン','ピンクライト','ピンクメタリック','グリッターブルー','ネオンオレンジ','ライトグレー',
+    'ミント','ミディアムピンク','グリーンイエロー','グレーブルー','パーリーレッド'
+  ];
+  // 半角カナ・ひらがな・長音符のゆれを吸収して比較用の形に揃える
+  function toKana_(s){
+    s = String(s||'');
+    try{ s = s.normalize('NFKC'); }catch(e){}
+    // 長音符「ー」は漢数字の一やダッシュ類に誤読されやすいので先に揃える
+    s = s.replace(/[一—―‐\-−ｰ_]/g, 'ー');
+    return s.replace(/[ぁ-ゖ]/g, function(c){ return String.fromCharCode(c.charCodeAt(0)+0x60); })
+            .replace(/\s+/g, '');
+  }
+  function editDistance_(a, b){
+    var m = a.length, n = b.length, prev = [], cur = [], i, j;
+    for (j=0;j<=n;j++) prev[j] = j;
+    for (i=1;i<=m;i++){
+      cur[0] = i;
+      for (j=1;j<=n;j++){
+        cur[j] = Math.min(prev[j]+1, cur[j-1]+1,
+                          prev[j-1] + (a.charAt(i-1) === b.charAt(j-1) ? 0 : 1));
+      }
+      for (j=0;j<=n;j++) prev[j] = cur[j];
+    }
+    return prev[n];
+  }
+  // 色名1語を辞書に照合する。2位と差がつかない（どちらとも取れる）ときは採用しない。
+  // 「ブラック」を「ピンク」と取り違えるくらいなら、空欄のほうが安全なため。
+  function matchColorWord_(seg){
+    seg = toKana_(seg);
+    if (seg.length < 2) return '';
+    var best = '', bd = 99, sd = 99;
+    for (var i=0;i<COLOR_WORDS.length;i++){
+      var d = editDistance_(seg, COLOR_WORDS[i]);
+      if (d < bd){ sd = bd; bd = d; best = COLOR_WORDS[i]; }
+      else if (d < sd){ sd = d; }
+    }
+    if (!best) return '';
+    if (bd > Math.max(1, Math.floor(best.length/2))) return '';
+    if (bd >= sd) return '';
+    return best;
+  }
+  // 色名らしい行か（数字・漢字が混ざらず、ほぼカタカナで構成されているか）
+  function looksLikeColorLine_(line){
+    var t = toKana_(line);
+    if (!t) return false;
+    if (/[0-9]/.test(t)) return false;
+    if (/[一-龠]/.test(t)) return false;
+    var kana = (t.match(/[ァ-ヶー]/g) || []).length;
+    return kana >= 3 && (kana / t.length) >= 0.7;
+  }
+  function colorFromKatakana_(text){
+    var lines = String(text||'').split(/\n/);
+    for (var i=0;i<lines.length;i++){
+      if (!looksLikeColorLine_(lines[i])) continue;
+      var segs = toKana_(lines[i]).split(/[\/／・]/).filter(function(x){ return x; });
+      if (!segs.length || segs.length > 4) continue;
+      var out = [], ok = true;
+      for (var j=0;j<segs.length;j++){
+        var m = matchColorWord_(segs[j]);
+        if (!m){ ok = false; break; }
+        out.push(m);
+      }
+      if (ok) return out.join('/');
+    }
+    return '';
+  }
   function extractColorFromText(text){
     var lines = String(text||'').split(/\n/);
     for (var i=0;i<lines.length;i++){
@@ -457,7 +539,8 @@
       v = v.replace(/[^A-Za-z0-9ぁ-んァ-ヶー一-龠\/・\s-]/g, '').trim();
       if (v.length >= 2 && v.length <= 30) return v;
     }
-    return '';
+    // ラベルが無い日本語タグは、カタカナの行を色名辞書と照合して復元する
+    return colorFromKatakana_(text);
   }
   function extractSizeFromText(text){
     var raw = String(text||'');
@@ -467,8 +550,24 @@
     // 1) ラベル付きのサイズを最優先する。
     //    ブラジル製のタグには「JPN: 23」「BRA: 35」が併記されるため、
     //    店舗で使うブラジル表記（BRA）を優先して拾う。
-    var labeled = raw.match(/BRA\s*[:：]?\s*([0-9]{1,2}(?:\.5)?)/i)
-               || raw.match(/(?:SIZE|サイズ)\s*[:：]?\s*([A-Za-z0-9]{1,5})/i);
+    //    「BRA」の綴り自体がOCRで崩れることがあるため、文字間の空白や
+    //    区切り記号のゆれを許して探す。
+    var bra = raw.match(/B\s*R\s*A\s*[:：;.,]?\s*([0-9]{1,2})(?:\s*[\/／]\s*[0-9]{1,2})?/i);
+    if (bra) return bra[1];
+    //    BRAの行が読めなくても、JPN表記さえ読めていれば「もう一方の数字」がBRA。
+    //    ブラジル表記は日本表記より必ず大きい（例：JPN 24 / BRA 36）。
+    var jpnLabel = raw.match(/J\s*P\s*N\s*[:：;.,]?\s*([0-9]{1,2})/i);
+    if (jpnLabel){
+      var jv = parseInt(jpnLabel[1], 10);
+      var bestBra = 0;
+      var nums = raw.match(/(?:^|[^0-9])([2-4][0-9])(?![0-9])/g) || [];
+      for (var k=0;k<nums.length;k++){
+        var nv = parseInt(nums[k].replace(/[^0-9]/g, ''), 10);
+        if (nv !== jv && nv > jv && nv >= 32 && nv <= 45 && nv > bestBra) bestBra = nv;
+      }
+      if (bestBra) return String(bestBra);
+    }
+    var labeled = raw.match(/(?:SIZE|サイズ)\s*[:：]?\s*([A-Za-z0-9]{1,5})/i);
     if (labeled) return String(labeled[1]).toUpperCase();
 
     // 2) ラベルなしの数字を探す。この時点で、日本表記のサイズと
