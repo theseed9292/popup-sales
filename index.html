@@ -199,7 +199,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v20</span></h3>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v21</span></h3>
     <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
@@ -219,7 +219,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <button type="button" class="tag tag-btn" id="store-tag" title="タップすると店舗を切り替えられます">店舗未設定</button>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v20</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v21</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -353,7 +353,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v20';
+  var APP_VERSION = 'v21';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -824,6 +824,11 @@
   // バーコードの数字をOCRで読む（解読できなかったときの保険）。
   // 切り出し位置を変えながら順に試し、チェックデジットが合った時点で確定する。
   function ocrJanFromWindows_(img){
+    return withDigitsOcr_(function(recognizeDigits){
+      return ocrJanWindowsWith_(img, recognizeDigits);
+    });
+  }
+  function ocrJanWindowsWith_(img, recognizeDigits){
     var wins = barcodeWindows_(img);
     var candidates = [];   // 画面に出すのは「JANらしい数字」だけ（縞模様由来のノイズは捨てる）
     var step = function(i){
@@ -834,7 +839,7 @@
       return canvasToFile_(canvas, 'strip.png')
         .then(function(input){
           // 数字だけを対象にすると誤読が大幅に減る（日本語モデルを混ぜると数字が崩れるため英語のみ）
-          return runOcr(input, { langs: 'eng', psm: '6', whitelist: '0123456789' });
+          return recognizeDigits(input);
         })
         .then(function(text){
           text = (text||'').trim();
@@ -861,42 +866,90 @@
     // バーコードの数字用：数字だけに絞ると誤読が大幅に減る（日本語を混ぜると数字が崩れる）
     digits:  { langs: 'eng',     params: { tessedit_pageseg_mode: '6', tessedit_char_whitelist: '0123456789' } }
   };
-  function getOcrWorker_(kind){
-    var cached = ocrWorkers[kind];
+  function createOcrWorker_(kind){
+    var cfg = OCR_SETUP[kind];
+    return Tesseract.createWorker(cfg.langs).then(function(worker){
+      return worker.setParameters(cfg.params).then(function(){ return worker; });
+    });
+  }
+  // 日本語辞書を読み込む general だけを使い回す。作るのが重いのはこちらだけのため。
+  // digits（英語・数字のみ）は軽いうえ、バーコードを解読できなかったときしか使わないので、
+  // 使い終わったら解放する。エンジンを2つ抱えたままにすると、スマホでは
+  // メモリ不足で読み取りが黙って失敗することがある（v20の不具合の原因）。
+  function getGeneralWorker_(){
+    var cached = ocrWorkers.general;
     // 読み取りライブラリ自体が入れ替わった場合は、前のエンジンは使えないので作り直す
     if (cached && cached.lib === Tesseract) return cached.promise;
     if (cached && cached.promise){
       cached.promise.then(function(w){ try{ w.terminate(); }catch(e){} }, function(){});
     }
-    var cfg = OCR_SETUP[kind];
     var lib = Tesseract;
-    var p = lib.createWorker(cfg.langs).then(function(worker){
-      return worker.setParameters(cfg.params).then(function(){ return worker; });
-    }).catch(function(err){
+    var p = createOcrWorker_('general').catch(function(err){
       // 失敗を覚え込まない。次の写真でもう一度作り直せるようにする
-      if (ocrWorkers[kind] && ocrWorkers[kind].promise === p) ocrWorkers[kind] = null;
+      if (ocrWorkers.general && ocrWorkers.general.promise === p) ocrWorkers.general = null;
       throw err;
     });
-    ocrWorkers[kind] = { lib: lib, promise: p };
+    ocrWorkers.general = { lib: lib, promise: p };
     return p;
+  }
+  // エンジンが応答しなくなった場合に備え、次の撮影では作り直せるようにしておく
+  function dropGeneralWorker_(){
+    var cached = ocrWorkers.general;
+    ocrWorkers.general = null;
+    if (cached && cached.promise){
+      cached.promise.then(function(w){ try{ w.terminate(); }catch(e){} }, function(){});
+    }
   }
   // 合言葉を入れた直後から、裏で辞書の読み込みを始めておく。
   // 最初の1枚を撮るころには準備が終わっているので、待たされない。
+  // ここで作るのは general だけ。2つ同時に読み込むと回線とメモリを取り合う。
   function warmUpOcr_(){
     if (typeof Tesseract === 'undefined') return;
-    try{
-      getOcrWorker_('general').catch(function(){});
-      getOcrWorker_('digits').catch(function(){});
-    }catch(err){ /* 準備できなくても、撮影時にやり直すので問題ない */ }
+    try{ getGeneralWorker_().catch(function(){}); }
+    catch(err){ /* 準備できなくても、撮影時にやり直すので問題ない */ }
   }
-  function runOcr(input, opts){
-    opts = opts || {};
-    var kind = opts.whitelist ? 'digits' : 'general';
-    return getOcrWorker_(kind)
+  function textOf_(result){
+    return (result && result.data && result.data.text) ? result.data.text : '';
+  }
+  // 写真全体の読み取り（使い回すエンジン）
+  function runOcr(input){
+    return getGeneralWorker_()
       .then(function(worker){ return worker.recognize(input); })
-      .then(function(result){
-        return (result && result.data && result.data.text) ? result.data.text : '';
+      .then(textOf_);
+  }
+  // 数字だけの読み取り。1回の撮影のあいだだけエンジンを借りて、最後に必ず解放する。
+  function withDigitsOcr_(fn){
+    return createOcrWorker_('digits').then(function(worker){
+      var release = function(){
+        return worker.terminate().then(function(){}, function(){});
+      };
+      var recognize = function(input){
+        return worker.recognize(input).then(textOf_);
+      };
+      return fn(recognize).then(
+        function(v){ return release().then(function(){ return v; }); },
+        function(e){ return release().then(function(){ throw e; }); }
+      );
+    });
+  }
+  // 指定秒で諦める。エンジンが固まったときに画面が固まったままにならないようにする。
+  function withTimeout_(promise, ms, onTimeout){
+    return new Promise(function(resolve, reject){
+      var done = false;
+      var timer = setTimeout(function(){
+        if (done) return;
+        done = true;
+        if (onTimeout) { try{ onTimeout(); }catch(e){} }
+        reject(new Error('ocr_timeout'));
+      }, ms);
+      promise.then(function(v){
+        if (done) return;
+        done = true; clearTimeout(timer); resolve(v);
+      }, function(e){
+        if (done) return;
+        done = true; clearTimeout(timer); reject(e);
       });
+    });
   }
   function setOcrStatus(msg, kind){
     var el = document.getElementById('ocr-status');
@@ -919,36 +972,64 @@
       return;
     }
     hideOcrResult();
-    setOcrStatus('文字を読み取っています…（数秒かかります）', '');
     document.getElementById('tagphoto-open').disabled = true;
     document.getElementById('scan-open').disabled = true;
-    // 品番・サイズ・カラー・価格用の読み取り（写真全体）と、
-    // JANコード用の読み取り（バーコード数字の付近を切り出して拡大）を並行して行い、結果を合わせる。
+
+    // 「固まった」ように見えないよう、経過に応じて表示を変える。
+    // 初回は辞書の読み込みが入るため、どうしても時間がかかる。
+    var startedAt = Date.now();
+    var ocrFailure = '';
+    setOcrStatus('文字を読み取っています…', '');
+    var tick = setInterval(function(){
+      var sec = Math.round((Date.now()-startedAt)/1000);
+      if (sec >= 8){
+        setOcrStatus('文字を読み取っています…（' + sec + '秒）初回は読み取り辞書の読み込みに時間がかかります', '');
+      }
+    }, 1000);
+    var stopTick = function(){ if (tick){ clearInterval(tick); tick = null; } };
+
+    // 写真全体の読み取り（品番・サイズ・カラー・価格用）
     var generalTextP = preprocessGeneral(file)
       .catch(function(){ return file; }) // 前処理に失敗しても元の写真でOCRを続ける
-      .then(function(input){ return runOcr(input, { langs: 'jpn+eng', psm: '6' }); })
-      .catch(function(){ return ''; });
-    // JANコードは「バーコードそのものの解読」を最優先し、駄目なら数字のOCRに切り替える
-    var janResultP = loadImageEl_(file).then(function(img){
+      .then(function(input){ return runOcr(input); })
+      .catch(function(err){
+        // 黙って空文字にすると「何も読めなかった」と区別がつかず、原因が分からなくなる
+        ocrFailure = (err && err.message) ? String(err.message) : 'unknown';
+        return '';
+      });
+
+    // バーコードそのものの解読は読み取りエンジンを使わないので、並行して進めてよい
+    var barcodeP = loadImageEl_(file).then(function(img){
       return decodeBarcodeFromPhoto_(file, img).then(function(decoded){
-        if (janLooksValid(decoded)) return { jan: decoded, decoded: true, texts: [] };
-        return ocrJanFromWindows_(img).then(function(r){
-          return { jan: r.jan, decoded: false, candidates: r.candidates || [] };
-        });
+        return { img: img, decoded: decoded };
       });
     }).catch(function(){
-      // 写真を画像として読み込めない環境（HEICなど）でも、解読と数字OCRだけは試す
+      // 写真を画像として読み込めない環境（HEICなど）でも、解読だけは試す
       return decodeBarcodeFromPhoto_(file, null).then(function(decoded){
-        if (janLooksValid(decoded)) return { jan: decoded, decoded: true, candidates: [] };
-        return runOcr(file, { langs: 'eng', psm: '6', whitelist: '0123456789' })
-          .then(function(t){
-            t = (t||'').trim();
-            return { jan: extractJanFromText(t), decoded: false, candidates: janCandidatesInText_(t) };
-          })
-          .catch(function(){ return { jan: '', decoded: false, candidates: [] }; });
-      }).catch(function(){ return { jan: '', decoded: false, candidates: [] }; });
+        return { img: null, decoded: decoded };
+      }).catch(function(){ return { img: null, decoded: '' }; });
     });
-    Promise.all([generalTextP, janResultP])
+
+    // 数字OCRへの切り替えは、写真全体の読み取りが終わってから行う。
+    // 読み取りエンジンを2つ同時に動かすとスマホのメモリを圧迫し、
+    // どちらも黙って失敗することがあるため、重ならないようにしている。
+    var janResultP = Promise.all([barcodeP, generalTextP]).then(function(arr){
+      var b = arr[0];
+      if (janLooksValid(b.decoded)) return { jan: b.decoded, decoded: true, candidates: [] };
+      if (b.img){
+        return ocrJanFromWindows_(b.img).then(function(r){
+          return { jan: r.jan, decoded: false, candidates: r.candidates || [] };
+        });
+      }
+      return withDigitsOcr_(function(recognizeDigits){
+        return recognizeDigits(file).then(function(t){
+          t = (t||'').trim();
+          return { jan: extractJanFromText(t), decoded: false, candidates: janCandidatesInText_(t) };
+        });
+      });
+    }).catch(function(){ return { jan: '', decoded: false, candidates: [] }; });
+
+    withTimeout_(Promise.all([generalTextP, janResultP]), 90000, dropGeneralWorker_)
       .then(function(results){
         var generalText = results[0] || '';
         var janResult = results[1] || { jan: '', decoded: false, candidates: [] };
@@ -1009,14 +1090,23 @@
         }
         if (filledAny){
           setOcrStatus(janMsg + '（他の項目も自動入力しています。内容をご確認ください）', janSource ? 'ok' : 'bad');
+        } else if (ocrFailure){
+          // 何も読めなかったのが「写真の問題」なのか「読み取り機能の問題」なのかを区別して伝える
+          setOcrStatus('読み取り機能を起動できませんでした（' + ocrFailure + '）。'
+            + 'ページを再読み込みしてもう一度お試しください。急ぐ場合は手入力をご利用ください。', 'bad');
+          dropGeneralWorker_();
         } else {
           setOcrStatus(janMsg, 'bad');
         }
       })
-      .catch(function(){
-        setOcrStatus('読み取りに失敗しました。手入力をご利用ください。', 'bad');
+      .catch(function(err){
+        var timedOut = err && err.message === 'ocr_timeout';
+        setOcrStatus(timedOut
+          ? '読み取りに時間がかかりすぎたため中止しました。通信状況の良い場所でもう一度お試しいただくか、手入力をご利用ください。'
+          : '読み取りに失敗しました。手入力をご利用ください。', 'bad');
       })
       .then(function(){
+        stopTick();
         document.getElementById('tagphoto-open').disabled = false;
         document.getElementById('scan-open').disabled = false;
       });
