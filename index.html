@@ -199,7 +199,7 @@
 
 <div class="modal" id="pin-modal">
   <div class="modal-card">
-    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v19</span></h3>
+    <h3>店舗名と合言葉を入力してください <span class="app-version mono" id="pin-version">v20</span></h3>
     <p>店舗名は、確定したときのファイル名（店舗名_日付）に使われます。</p>
     <div class="field">
       <label for="store-input">店舗名（必須）</label>
@@ -219,7 +219,7 @@
     <div class="brand">
       <h1>POPUP売上</h1>
       <button type="button" class="tag tag-btn" id="store-tag" title="タップすると店舗を切り替えられます">店舗未設定</button>
-      <span class="app-version mono" id="app-version" title="アプリのバージョン">v19</span>
+      <span class="app-version mono" id="app-version" title="アプリのバージョン">v20</span>
       <span class="sync-dot" id="sync-dot" title="同期状態"></span>
     </div>
     <div id="day-tabs" class="day-tabs"></div>
@@ -353,7 +353,7 @@
   // ↑↑↑ ここまで ↑↑↑
 
   // 画面右上に表示されるバージョン。どの版が動いているか確認するために使う。
-  var APP_VERSION = 'v19';
+  var APP_VERSION = 'v20';
   var POLL_MS = 8000;
   var pin = null;
   var storeName = '';       // 店舗名（合言葉と一緒に入力し、確定ファイル名に使う）
@@ -664,7 +664,11 @@
     return loadImageEl_(file).then(function(img){
       var w = img.naturalWidth||img.width, h = img.naturalHeight||img.height;
       var longSide = Math.max(w, h) || 1;
-      var scale = Math.min(2.5, Math.max(1, 2000/longSide));
+      // 長辺を1600pxに揃える。以前は「拡大はするが縮小はしない」式だったため、
+      // スマホの写真（3024×4032など）がそのまま読み取りに渡されていた。
+      // 実機のタグ写真で確認したところ、1600pxまで縮めても品番・サイズ・価格の
+      // 読み取り結果は変わらず、処理する画素数が約6分の1になる。
+      var scale = Math.min(2.5, 1600/longSide);
       var dw = Math.round(w*scale), dh = Math.round(h*scale);
       var canvas = document.createElement('canvas');
       canvas.width = dw; canvas.height = dh;
@@ -845,23 +849,54 @@
     };
     return step(0);
   }
+  // ---- 読み取りエンジンの使い回し ----
+  // 以前は1枚の写真ごとに、読み取りのたびにエンジンを作り直して捨てていた。
+  // エンジンの起動には日本語の辞書ファイル（数十MB）の読み込みが含まれるため、
+  // 写真1枚あたり最大7回もその準備をやり直しており、これが待ち時間のほとんどだった。
+  // 用途ごとに1つずつ用意して、以降はずっと使い回す（設定も作るときに1回だけ）。
+  var ocrWorkers = {};
+  var OCR_SETUP = {
+    // 写真全体：品番・サイズ・カラー・価格用（「税込」「本体」を読むので日本語が要る）
+    general: { langs: 'jpn+eng', params: { tessedit_pageseg_mode: '6' } },
+    // バーコードの数字用：数字だけに絞ると誤読が大幅に減る（日本語を混ぜると数字が崩れる）
+    digits:  { langs: 'eng',     params: { tessedit_pageseg_mode: '6', tessedit_char_whitelist: '0123456789' } }
+  };
+  function getOcrWorker_(kind){
+    var cached = ocrWorkers[kind];
+    // 読み取りライブラリ自体が入れ替わった場合は、前のエンジンは使えないので作り直す
+    if (cached && cached.lib === Tesseract) return cached.promise;
+    if (cached && cached.promise){
+      cached.promise.then(function(w){ try{ w.terminate(); }catch(e){} }, function(){});
+    }
+    var cfg = OCR_SETUP[kind];
+    var lib = Tesseract;
+    var p = lib.createWorker(cfg.langs).then(function(worker){
+      return worker.setParameters(cfg.params).then(function(){ return worker; });
+    }).catch(function(err){
+      // 失敗を覚え込まない。次の写真でもう一度作り直せるようにする
+      if (ocrWorkers[kind] && ocrWorkers[kind].promise === p) ocrWorkers[kind] = null;
+      throw err;
+    });
+    ocrWorkers[kind] = { lib: lib, promise: p };
+    return p;
+  }
+  // 合言葉を入れた直後から、裏で辞書の読み込みを始めておく。
+  // 最初の1枚を撮るころには準備が終わっているので、待たされない。
+  function warmUpOcr_(){
+    if (typeof Tesseract === 'undefined') return;
+    try{
+      getOcrWorker_('general').catch(function(){});
+      getOcrWorker_('digits').catch(function(){});
+    }catch(err){ /* 準備できなくても、撮影時にやり直すので問題ない */ }
+  }
   function runOcr(input, opts){
     opts = opts || {};
-    var langs = opts.langs || 'jpn+eng';
-    return Tesseract.createWorker(langs).then(function(worker){
-      var params = { tessedit_pageseg_mode: opts.psm || '6' };
-      if (opts.whitelist) params.tessedit_char_whitelist = opts.whitelist;
-      return worker.setParameters(params)
-        .then(function(){ return worker.recognize(input); })
-        .then(function(result){
-          return worker.terminate().then(function(){
-            return (result && result.data && result.data.text) ? result.data.text : '';
-          });
-        })
-        .catch(function(err){
-          return worker.terminate().then(function(){ throw err; }, function(){ throw err; });
-        });
-    });
+    var kind = opts.whitelist ? 'digits' : 'general';
+    return getOcrWorker_(kind)
+      .then(function(worker){ return worker.recognize(input); })
+      .then(function(result){
+        return (result && result.data && result.data.text) ? result.data.text : '';
+      });
   }
   function setOcrStatus(msg, kind){
     var el = document.getElementById('ocr-status');
@@ -1034,6 +1069,7 @@
     document.getElementById('pin-modal').hidden = true;
     document.getElementById('app-root').hidden = false;
     setScreen('add');
+    warmUpOcr_();          // 撮影を待たずに読み取りの準備を始めておく
     refreshEntries(true);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(function(){ refreshEntries(false); }, POLL_MS);
